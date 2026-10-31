@@ -73,7 +73,10 @@ android {
 
 tasks.withType<Test> {
   failFast = true
-  timeout.set(Duration.ofMinutes(2))
+  timeout.set(Duration.ofMinutes(10))
+  // Screenshot tests (app/src/test/.../ScreenshotTest.kt) write PNGs to app/build/outputs/roborazzi
+  systemProperty("roborazzi.test.record", "true")
+  maxHeapSize = "3g"
   testLogging { events("passed", "failed", "skipped") }
 }
 
@@ -139,6 +142,8 @@ dependencies {
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)
   testImplementation(libs.robolectric)
+  testImplementation(libs.roborazzi)
+  testImplementation(libs.roborazzi.compose)
   androidTestImplementation(platform(libs.androidx.compose.bom))
   androidTestImplementation(libs.androidx.compose.ui.test.junit4)
   androidTestImplementation(libs.androidx.espresso.core)

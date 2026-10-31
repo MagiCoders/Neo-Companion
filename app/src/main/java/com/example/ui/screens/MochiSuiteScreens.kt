@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -65,6 +66,9 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalContext
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -644,7 +648,7 @@ fun SearchScreen(
                     Text(
                         text = "E",
                         style = MochiType.Body.copy(fontWeight = FontWeight.Bold),
-                        color = Color(0xFF07090F)
+                        color = MochiTokens.onAccent
                     )
                 }
                 Column {
@@ -811,11 +815,20 @@ fun ProfileAndSettingsScreen(
     onOpenComponentGallery: () -> Unit,
     onBack: () -> Unit,
     settings: MochiPersistentSettings = MochiPersistentSettings(),
+    onSignOut: () -> Unit = {},
     onUpdateSettings: ((MochiPersistentSettings) -> MochiPersistentSettings) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val p = rememberSuiteColors()
     val accent = LocalCharacterAccent.current
+    var showLanguageSheet by remember { mutableStateOf(false) }
+    var showWakeConfirm by remember { mutableStateOf(false) }
+    var showSignOutConfirm by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val realAllowed = remember(settings) {
+        listOf("Usage access", "Physical activity", "Microphone", "Display over other apps", "Contacts", "Phone calls", "Camera", "Notifications")
+            .count { SystemPermissions.isGranted(context, it) }
+    }
     val busyModeLabel = when (settings.busyBehaviorIndex) {
         0 -> "Voice only"
         1 -> "Save for later"
@@ -1003,7 +1016,7 @@ fun ProfileAndSettingsScreen(
                 title = "Language",
                 trailingText = settings.preferredLanguage,
                 palette = p,
-                onClick = onOpenEditProfile
+                onClick = { showLanguageSheet = true }
             )
         }
 
@@ -1048,7 +1061,8 @@ fun ProfileAndSettingsScreen(
                 accent = accent,
                 palette = p,
                 onCheckedChange = { enabled ->
-                    onUpdateSettings { it.copy(wakeWordEnabled = enabled) }
+                    if (enabled) showWakeConfirm = true
+                    else onUpdateSettings { it.copy(wakeWordEnabled = false) }
                 }
             )
         }
@@ -1092,7 +1106,7 @@ fun ProfileAndSettingsScreen(
             SettingsIconNavRow(
                 icon = Icons.Outlined.Shield,
                 title = "Permissions",
-                trailingText = "${settings.allowedPermissions.size} of 8 allowed",
+                trailingText = "$realAllowed of 8 allowed",
                 palette = p,
                 onClick = onOpenPermissions
             )
@@ -1112,27 +1126,82 @@ fun ProfileAndSettingsScreen(
                 palette = p,
                 onClick = onOpenHelpFeedback
             )
-            HairlineDivider(p.hairline)
-            SettingsIconToggleRow(
-                icon = Icons.Outlined.Nightlight,
-                title = "Dark stage theme",
-                subtitle = "Switch between Dark Aurora and Warm Paper light mode",
-                checked = isDarkTheme,
-                accent = accent,
-                palette = p,
-                onCheckedChange = onToggleDarkTheme
-            )
-            HairlineDivider(p.hairline)
-            SettingsIconNavRow(
-                icon = Icons.Outlined.GridView,
-                title = "Component gallery",
-                trailingText = "Tokens",
-                palette = p,
-                onClick = onOpenComponentGallery
-            )
         }
 
+        Text(text = "Appearance", style = MochiType.Label, color = p.textSecondary)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(MochiShapes.card)
+                .background(p.card)
+                .border(1.dp, p.hairline, MochiShapes.card)
+        ) {
+            AppearanceSegmented(mode = settings.themeMode, accent = accent) { mode ->
+                onUpdateSettings { it.copy(themeMode = mode) }
+            }
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(MochiShapes.card)
+                .background(p.card)
+                .border(1.dp, p.hairline, MochiShapes.card)
+                .clickable { showSignOutConfirm = true }
+                .padding(MochiSpacing.md),
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Text("Sign out", style = MochiType.Body.copy(fontWeight = FontWeight.SemiBold), color = MochiTokens.danger)
+        }
+
+        Text(
+            text = "MochiLife 1.0",
+            style = MochiType.Label,
+            color = p.textTertiary,
+            modifier = Modifier.align(Alignment.CenterHorizontally)
+        )
+
         Spacer(modifier = Modifier.height(MochiSpacing.md))
+    }
+
+    if (showLanguageSheet) {
+        LanguageSheet(
+            current = settings.preferredLanguage,
+            accent = accent,
+            onPick = { lang ->
+                onUpdateSettings { it.copy(preferredLanguage = lang) }
+                showLanguageSheet = false
+            },
+            onDismiss = { showLanguageSheet = false }
+        )
+    }
+    if (showWakeConfirm) {
+        SettingsConfirmDialog(
+            title = "Listen for \"Hey ${activeCharacter.displayName.substringAfter(" ")}\"?",
+            body = "While the app is open or your companion is floating, the microphone stays on and only reacts when it hears her name. It uses more battery, and some phones play a short sound each time listening restarts.",
+            confirm = "Turn on",
+            danger = false,
+            accent = accent,
+            onConfirm = {
+                onUpdateSettings { it.copy(wakeWordEnabled = true) }
+                showWakeConfirm = false
+            },
+            onDismiss = { showWakeConfirm = false }
+        )
+    }
+    if (showSignOutConfirm) {
+        SettingsConfirmDialog(
+            title = "Sign out?",
+            body = "Your chats and settings stay saved to your account. You can sign back in any time.",
+            confirm = "Sign out",
+            danger = true,
+            accent = accent,
+            onConfirm = {
+                showSignOutConfirm = false
+                onSignOut()
+            },
+            onDismiss = { showSignOutConfirm = false }
+        )
     }
 }
 
@@ -1223,7 +1292,7 @@ fun EditProfileScreen(
                         Icon(
                             imageVector = Icons.Outlined.CameraAlt,
                             contentDescription = "Change photo",
-                            tint = Color(0xFF07090F),
+                            tint = MochiTokens.onAccent,
                             modifier = Modifier.size(16.dp)
                         )
                     }
@@ -1398,7 +1467,7 @@ fun EditProfileScreen(
             Text(
                 text = "Save changes",
                 style = MochiType.Body.copy(fontWeight = FontWeight.SemiBold),
-                color = Color(0xFF07090F)
+                color = MochiTokens.onAccent
             )
         }
     }
@@ -1493,7 +1562,7 @@ fun WalletScreen(
                         color = p.textPrimary
                     )
                     Text(
-                        text = "[PRICE] a month · renews Nov 30",
+                        text = "Monthly plan · renews Nov 30",
                         style = MochiType.Label,
                         color = p.textSecondary
                     )
@@ -1531,9 +1600,9 @@ fun WalletScreen(
             horizontalArrangement = Arrangement.spacedBy(MochiSpacing.xs)
         ) {
             listOf(
-                Triple("500", "[PRICE]", false),
-                Triple("1,500", "[PRICE]", true),
-                Triple("5,000", "[PRICE]", false)
+                Triple("500", "See price", false),
+                Triple("1,500", "See price", true),
+                Triple("5,000", "See price", false)
             ).forEach { (amount, price, popular) ->
                 Box(modifier = Modifier.weight(1f)) {
                     Column(
@@ -1647,7 +1716,7 @@ fun WalletScreen(
                 Text(
                     text = if (checkedInToday) "Checked in" else "Check in",
                     style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold),
-                    color = Color(0xFF07090F)
+                    color = MochiTokens.onAccent
                 )
             }
         }
@@ -1725,62 +1794,46 @@ fun PermissionsScreen(
 ) {
     val p = rememberSuiteColors()
     val accent = LocalCharacterAccent.current
+    val context = LocalContext.current
+    val companionFirst = "your companion"
+    // Real system state, re-read every time the screen resumes (e.g. after visiting Settings).
+    var refreshTick by remember { mutableStateOf(0) }
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, e ->
+            if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) refreshTick++
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
+    val runtimeLauncher = rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { refreshTick++ }
+
     val basePermissions = remember {
         listOf(
-            PermissionEntry(
-                icon = Icons.Outlined.Equalizer,
-                title = "Usage access",
-                subtitle = "Needed for busy mode. Tells Elena when a video or game is open.",
-                allowed = false
-            ),
-            PermissionEntry(
-                icon = Icons.Outlined.DirectionsCar,
-                title = "Physical activity",
-                subtitle = "Lets driving mode start by itself.",
-                allowed = false
-            ),
-            PermissionEntry(
-                icon = Icons.Outlined.Mic,
-                title = "Microphone",
-                subtitle = "So you can talk to your companion.",
-                allowed = true
-            ),
-            PermissionEntry(
-                icon = Icons.Outlined.PictureInPictureAlt,
-                title = "Display over other apps",
-                subtitle = "Lets Elena float on your home screen.",
-                allowed = true
-            ),
-            PermissionEntry(
-                icon = Icons.Outlined.PersonOutline,
-                title = "Contacts",
-                subtitle = "To call or message people by name.",
-                allowed = true
-            ),
-            PermissionEntry(
-                icon = Icons.Outlined.Call,
-                title = "Phone calls",
-                subtitle = "To place calls when you ask.",
-                allowed = true
-            ),
-            PermissionEntry(
-                icon = Icons.Outlined.CameraAlt,
-                title = "Camera",
-                subtitle = "For Fridge Chef and scanning documents.",
-                allowed = true
-            ),
-            PermissionEntry(
-                icon = Icons.Outlined.NotificationsNone,
-                title = "Notifications",
-                subtitle = "Reminders and answers saved for later.",
-                allowed = true
-            )
+            PermissionEntry(Icons.Outlined.Equalizer, "Usage access", "Needed for busy mode. Tells $companionFirst when a video or game is open.", false),
+            PermissionEntry(Icons.Outlined.DirectionsCar, "Physical activity", "Lets driving mode start by itself.", false),
+            PermissionEntry(Icons.Outlined.Mic, "Microphone", "So you can talk to your companion.", false),
+            PermissionEntry(Icons.Outlined.PictureInPictureAlt, "Display over other apps", "Lets your companion float over other apps.", false),
+            PermissionEntry(Icons.Outlined.PersonOutline, "Contacts", "To call or message people by name.", false),
+            PermissionEntry(Icons.Outlined.Call, "Phone calls", "To place calls when you ask.", false),
+            PermissionEntry(Icons.Outlined.CameraAlt, "Camera", "For Fridge Chef and scanning documents.", false),
+            PermissionEntry(Icons.Outlined.NotificationsNone, "Notifications", "Reminders and answers saved for later.", false)
         )
     }
-    val permissions = basePermissions.map { entry ->
-        entry.copy(allowed = settings.allowedPermissions.contains(entry.title))
+    val permissions = remember(refreshTick) {
+        basePermissions.map { it.copy(allowed = SystemPermissions.isGranted(context, it.title)) }
     }
     val allowedCount = permissions.count { it.allowed }
+    val onTapPermission: (PermissionEntry) -> Unit = { entry ->
+        if (entry.allowed) {
+            SystemPermissions.openAppSettings(context)
+        } else {
+            val runtime = SystemPermissions.runtimePermission(entry.title)
+            if (runtime != null) runtimeLauncher.launch(runtime) else SystemPermissions.openSpecialSettings(context, entry.title)
+        }
+    }
 
     Column(
         modifier = modifier
@@ -1845,9 +1898,7 @@ fun PermissionsScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable {
-                            onTogglePermission(entry.title)
-                        }
+                        .clickable { onTapPermission(entry) }
                         .padding(MochiSpacing.md),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
@@ -1895,7 +1946,7 @@ fun PermissionsScreen(
                             Text(
                                 text = "✓ Allowed",
                                 style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold),
-                                color = accent
+                                color = MochiTokens.accentInk(accent)
                             )
                         }
                     } else {
@@ -1908,7 +1959,7 @@ fun PermissionsScreen(
                             Text(
                                 text = "Allow",
                                 style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold),
-                                color = Color(0xFF07090F)
+                                color = MochiTokens.onAccent
                             )
                         }
                     }
@@ -2179,7 +2230,7 @@ fun HelpAndFeedbackScreen(
                     Text(
                         text = "E",
                         style = MochiType.Body.copy(fontWeight = FontWeight.Bold),
-                        color = Color(0xFF07090F)
+                        color = MochiTokens.onAccent
                     )
                 }
                 Column {
@@ -2379,7 +2430,7 @@ fun WhenYouAreBusyScreen(
                     Text(
                         text = "E",
                         style = MochiType.Label.copy(fontWeight = FontWeight.Bold),
-                        color = Color(0xFF07090F)
+                        color = MochiTokens.onAccent
                     )
                 }
                 Icon(
@@ -2516,7 +2567,7 @@ fun WhenYouAreBusyScreen(
                             modifier = Modifier
                                 .size(8.dp)
                                 .clip(CircleShape)
-                                .background(Color(0xFF07090F))
+                                .background(MochiTokens.onAccent)
                         )
                     }
                 }
@@ -2686,7 +2737,7 @@ fun DrivingModeScreen(
             Text(
                 text = "Cancel",
                 style = MochiType.Title.copy(fontWeight = FontWeight.SemiBold),
-                color = if (isLight) Color(0xFFF6F3EC) else Color(0xFF07090F)
+                color = if (isLight) Color(0xFFF6F3EC) else MochiTokens.onAccent
             )
         }
     }
@@ -3034,7 +3085,7 @@ fun QuestsScreen(
                 Text(
                     text = "Add",
                     style = MochiType.Body.copy(fontWeight = FontWeight.SemiBold),
-                    color = Color(0xFF07090F)
+                    color = MochiTokens.onAccent
                 )
             }
         }
@@ -3072,7 +3123,7 @@ fun QuestsScreen(
                                 Icon(
                                     imageVector = Icons.Outlined.Check,
                                     contentDescription = "Completed",
-                                    tint = Color(0xFF07090F),
+                                    tint = MochiTokens.onAccent,
                                     modifier = Modifier.size(16.dp)
                                 )
                             }
@@ -3099,3 +3150,176 @@ fun QuestsScreen(
     }
 }
 
+
+/** Reads and requests the real Android permissions behind the Permissions screen rows. */
+object SystemPermissions {
+    fun runtimePermission(title: String): String? = when (title) {
+        "Physical activity" -> if (android.os.Build.VERSION.SDK_INT >= 29) android.Manifest.permission.ACTIVITY_RECOGNITION else null
+        "Microphone" -> android.Manifest.permission.RECORD_AUDIO
+        "Contacts" -> android.Manifest.permission.READ_CONTACTS
+        "Phone calls" -> android.Manifest.permission.CALL_PHONE
+        "Camera" -> android.Manifest.permission.CAMERA
+        "Notifications" -> if (android.os.Build.VERSION.SDK_INT >= 33) android.Manifest.permission.POST_NOTIFICATIONS else null
+        else -> null
+    }
+
+    fun isGranted(context: android.content.Context, title: String): Boolean = when (title) {
+        "Display over other apps" -> android.provider.Settings.canDrawOverlays(context)
+        "Usage access" -> try {
+            val ops = context.getSystemService(android.content.Context.APP_OPS_SERVICE) as android.app.AppOpsManager
+            @Suppress("DEPRECATION")
+            ops.checkOpNoThrow(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS, android.os.Process.myUid(), context.packageName) ==
+                android.app.AppOpsManager.MODE_ALLOWED
+        } catch (_: Throwable) { false }
+        "Notifications" -> androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled()
+        "Physical activity" -> if (android.os.Build.VERSION.SDK_INT < 29) true else granted(context, android.Manifest.permission.ACTIVITY_RECOGNITION)
+        else -> runtimePermission(title)?.let { granted(context, it) } ?: false
+    }
+
+    private fun granted(context: android.content.Context, perm: String) =
+        androidx.core.content.ContextCompat.checkSelfPermission(context, perm) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    fun openSpecialSettings(context: android.content.Context, title: String) {
+        val pkg = android.net.Uri.parse("package:${context.packageName}")
+        val intent = when (title) {
+            "Display over other apps" -> android.content.Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION, pkg)
+            "Usage access" -> android.content.Intent(android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS)
+            else -> android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkg)
+        }
+        try { context.startActivity(intent) } catch (_: Exception) { openAppSettings(context) }
+    }
+
+    fun openAppSettings(context: android.content.Context) {
+        try {
+            context.startActivity(
+                android.content.Intent(
+                    android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    android.net.Uri.parse("package:${context.packageName}")
+                )
+            )
+        } catch (_: Exception) {}
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Settings sheets & dialogs (Screen map: Language sheet, wake-word confirm, Appearance, Sign out)
+// ---------------------------------------------------------------------------------------------
+
+private val SettingsLanguages = listOf(
+    "English", "العربية (Arabic)", "اردو (Urdu)", "Español", "Français", "Deutsch", "Italiano",
+    "Português", "Türkçe", "Русский", "हिन्दी (Hindi)", "বাংলা (Bengali)", "Bahasa Indonesia",
+    "日本語 (Japanese)", "한국어 (Korean)", "中文 (Chinese)", "Filipino", "Nederlands", "Polski"
+)
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun LanguageSheet(current: String, accent: Color, onPick: (String) -> Unit, onDismiss: () -> Unit) {
+    var query by remember { mutableStateOf("") }
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MochiTokens.sheet,
+        scrimColor = MochiTokens.scrim,
+        shape = MochiShapes.sheetTop
+    ) {
+        Column(Modifier.padding(horizontal = MochiSpacing.screenPadding).padding(bottom = 24.dp)) {
+            Text("Language", style = MochiType.Title, color = MochiTokens.textPrimary)
+            Text("Your companion speaks and listens in this language.", style = MochiType.Label, color = MochiTokens.textSecondary)
+            Spacer(Modifier.height(12.dp))
+            androidx.compose.foundation.text.BasicTextField(
+                value = query,
+                onValueChange = { query = it },
+                singleLine = true,
+                textStyle = MochiType.Body.copy(color = MochiTokens.textPrimary),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(accent),
+                decorationBox = { inner ->
+                    Row(
+                        Modifier.fillMaxWidth().height(48.dp).clip(MochiShapes.pill).background(MochiTokens.card2).padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Outlined.Search, null, tint = MochiTokens.textTertiary, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(10.dp))
+                        Box(Modifier.weight(1f)) {
+                            if (query.isEmpty()) Text("Search languages", style = MochiType.Body, color = MochiTokens.textTertiary)
+                            inner()
+                        }
+                    }
+                }
+            )
+            Spacer(Modifier.height(8.dp))
+            val list = SettingsLanguages.filter { it.contains(query, ignoreCase = true) }
+            androidx.compose.foundation.lazy.LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                items(list.size) { i ->
+                    val lang = list[i]
+                    val selected = lang.startsWith(current) || current.startsWith(lang.substringBefore(" ("))
+                    Row(
+                        Modifier.fillMaxWidth().clip(MochiShapes.card).clickable { onPick(lang.substringBefore(" (")) }
+                            .padding(horizontal = 12.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(lang, style = MochiType.Body, color = MochiTokens.textPrimary, modifier = Modifier.weight(1f))
+                        if (selected) Icon(Icons.Outlined.Check, "Selected", tint = MochiTokens.accentInk(accent), modifier = Modifier.size(20.dp))
+                    }
+                }
+                if (list.isEmpty()) item {
+                    Text("No language matches \"$query\"", style = MochiType.Label, color = MochiTokens.textSecondary, modifier = Modifier.padding(12.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsConfirmDialog(
+    title: String,
+    body: String,
+    confirm: String,
+    danger: Boolean,
+    accent: Color,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MochiTokens.sheet,
+        shape = MochiShapes.sheet,
+        title = { Text(title, style = MochiType.Title, color = MochiTokens.textPrimary) },
+        text = { Text(body, style = MochiType.Body, color = MochiTokens.textSecondary) },
+        confirmButton = {
+            Box(
+                Modifier.clip(MochiShapes.pill)
+                    .background(if (danger) MochiTokens.dangerSolid else accent)
+                    .clickable(onClick = onConfirm)
+                    .padding(horizontal = 20.dp, vertical = 10.dp)
+            ) {
+                Text(confirm, style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold), color = if (danger) Color.White else MochiTokens.onAccent)
+            }
+        },
+        dismissButton = {
+            Box(Modifier.clip(MochiShapes.pill).clickable(onClick = onDismiss).padding(horizontal = 16.dp, vertical = 10.dp)) {
+                Text("Cancel", style = MochiType.Label, color = MochiTokens.textSecondary)
+            }
+        }
+    )
+}
+
+@Composable
+private fun AppearanceSegmented(mode: Int, accent: Color, onPick: (Int) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(MochiSpacing.md).clip(MochiShapes.pill).background(MochiTokens.card2).padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        listOf("Dark", "Light", "Auto").forEachIndexed { i, label ->
+            val sel = i == mode
+            Box(
+                Modifier.weight(1f).height(40.dp).clip(MochiShapes.pill)
+                    .background(if (sel) MochiTokens.sheet else Color.Transparent)
+                    .then(if (sel) Modifier.border(1.dp, MochiTokens.border, MochiShapes.pill) else Modifier)
+                    .clickable { onPick(i) },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(label, style = MochiType.Label.copy(fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Medium),
+                    color = if (sel) MochiTokens.textPrimary else MochiTokens.textSecondary)
+            }
+        }
+    }
+}

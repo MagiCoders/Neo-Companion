@@ -53,6 +53,8 @@ import androidx.compose.material.icons.outlined.CheckCircleOutline
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.outlined.GridView
+import androidx.compose.material.icons.outlined.SwapHoriz
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.PersonOutline
@@ -166,6 +168,9 @@ fun StageScreen(
     val hairline = if (visualStyle.isLight) MochiTokens.lightHairline else MochiTokens.hairline
     val surfaceRaised = if (visualStyle.isLight) MochiTokens.lightBgRaised else MochiTokens.bgRaised
 
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    var controlsHeightPx by remember { mutableStateOf(0) }
+
     fun triggerVoiceMic() {
         view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
         onMicTap()
@@ -204,8 +209,13 @@ fun StageScreen(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(if (showConversationSheet) 0.44f else 0.56f)
-                .padding(top = 48.dp)
+                // Fills exactly the space between the top bar and the controls, so the status
+                // pill can never sit on top of the greeting (it used to overlap on most phones).
+                .then(
+                    if (showConversationSheet) Modifier.fillMaxHeight(0.40f)
+                    else Modifier.fillMaxHeight().padding(bottom = with(density) { controlsHeightPx.toDp() } + 8.dp)
+                )
+                .padding(top = 60.dp)
                 .align(Alignment.TopCenter)
                 .testTag("stage_character_container")
         ) {
@@ -378,27 +388,6 @@ fun StageScreen(
                         )
                     }
 
-                    // Tools button (required by DESIGN.md top-right)
-                    Box(
-                        modifier = Modifier
-                            .size(MochiSpacing.minTouchTarget)
-                            .clip(MochiShapes.pill)
-                            .background(surfaceRaised.copy(alpha = 0.92f))
-                            .border(1.dp, hairline, MochiShapes.pill)
-                            .clickable {
-                                view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-                                onOpenTools()
-                            }
-                            .testTag("stage_tools_button"),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.GridView,
-                            contentDescription = "Open tools",
-                            tint = textPrimary,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
                 }
             }
         }
@@ -484,6 +473,7 @@ fun StageScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .align(Alignment.BottomCenter)
+                .onSizeChanged { controlsHeightPx = it.height }
                 .padding(
                     start = MochiSpacing.screenPadding,
                     end = MochiSpacing.screenPadding,
@@ -502,7 +492,7 @@ fun StageScreen(
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     Text(
-                        text = "Good evening",
+                        text = greetingForNow(),
                         style = MochiType.Label,
                         color = textSecondary
                     )
@@ -515,11 +505,8 @@ fun StageScreen(
 
                 // Up to 3 suggestion chips (strictly per DESIGN.md)
                 val suggestions = remember(character) {
-                    listOf(
-                        "Call Neo on WhatsApp",
-                        "Open chat with Neo and read voice message",
-                        "Open YouTube and search relaxing music"
-                    )
+                    listOf("What's for dinner?", "Split last night's bill", "Message Neo") +
+                        character.defaultSuggestions
                 }
                 Row(
                     modifier = Modifier
@@ -599,13 +586,13 @@ fun StageScreen(
                         modifier = Modifier.weight(1f)
                     )
                     HomeQuickActionTile(
-                        label = "Quests",
-                        icon = Icons.Outlined.CheckCircleOutline,
+                        label = "Convert",
+                        icon = Icons.Outlined.SwapHoriz,
                         accent = accent,
                         surfaceRaised = surfaceRaised,
                         hairline = hairline,
                         textPrimary = textPrimary,
-                        onClick = onOpenQuests,
+                        onClick = onOpenConverter,
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -799,8 +786,8 @@ fun StageInputBar(
 
             val canSend = value.trim().isNotEmpty()
 
-            // Mic button (48dp touch target)
-            Box(
+            // One round button: mic while empty, send once there is text (as in the design).
+            if (!canSend) Box(
                 modifier = Modifier
                     .size(MochiSpacing.minTouchTarget)
                     .graphicsLayer {
@@ -825,15 +812,14 @@ fun StageInputBar(
                 Icon(
                     imageVector = Icons.Outlined.Mic,
                     contentDescription = "Voice input",
-                    tint = if (!canSend) MochiTokens.bg else textPrimary,
+                    tint = MochiTokens.onAccent,
                     modifier = Modifier.size(22.dp)
                 )
             }
 
-            // Send button (shown/enabled when text is present; kept in tree for automated tests)
-            Box(
+            if (canSend) Box(
                 modifier = Modifier
-                    .size(if (canSend) MochiSpacing.minTouchTarget else 36.dp)
+                    .size(MochiSpacing.minTouchTarget)
                     .clip(MochiShapes.pill)
                     .background(if (canSend) accent else MochiTokens.hairline)
                     .clickable(enabled = canSend) { onSendClick() }
@@ -843,8 +829,8 @@ fun StageInputBar(
                 Icon(
                     imageVector = Icons.AutoMirrored.Outlined.Send,
                     contentDescription = "Send message",
-                    tint = if (canSend) MochiTokens.bg else textTertiary,
-                    modifier = Modifier.size(18.dp)
+                    tint = MochiTokens.onAccent,
+                    modifier = Modifier.size(20.dp)
                 )
             }
         }
@@ -1052,5 +1038,14 @@ private fun ConversationTurnItem(
                 }
             }
         }
+    }
+}
+
+private fun greetingForNow(): String {
+    val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+    return when (hour) {
+        in 5..11 -> "Good morning"
+        in 12..17 -> "Good afternoon"
+        else -> "Good evening"
     }
 }

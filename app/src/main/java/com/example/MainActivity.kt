@@ -207,6 +207,11 @@ fun MochiLifeRootContainer() {
     val selectedCharacter by viewModel.selectedCharacter.collectAsStateWithLifecycle()
     val previewAccentCharacter by viewModel.previewAccentCharacter.collectAsStateWithLifecycle()
     val selectedVisualStyle by viewModel.selectedVisualStyle.collectAsStateWithLifecycle()
+    val rootSettings by viewModel.settings.collectAsStateWithLifecycle()
+    val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
+    LaunchedEffect(rootSettings.themeMode, systemDark) {
+        viewModel.applyThemeMode(rootSettings.themeMode, systemDark)
+    }
     val chatHistory by viewModel.chatHistory.collectAsStateWithLifecycle()
     val isCompanionThinking by viewModel.isCompanionThinking.collectAsStateWithLifecycle()
     val activeAccent = (previewAccentCharacter ?: selectedCharacter).accent
@@ -739,6 +744,10 @@ fun MochiAppHost(
                             onOpenPrivacyData = { viewModel.navigateHash(MochiHashRoutes.PRIVACY) },
                             onOpenHelpFeedback = { viewModel.navigateHash(MochiHashRoutes.HELP) },
                             onOpenComponentGallery = { viewModel.navigateHash(MochiHashRoutes.COMPONENT_GALLERY) },
+                            onSignOut = {
+                                viewModel.voiceCommandService.stopListening()
+                                com.google.firebase.auth.FirebaseAuth.getInstance().signOut()
+                            },
                             onBack = { viewModel.navigateHash(MochiHashRoutes.STAGE) }
                         )
                     }

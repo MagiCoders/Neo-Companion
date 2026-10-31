@@ -124,6 +124,7 @@ class CadenceViewModel(
             useVoiceToneForCheckIns = prefs.getBoolean("useVoiceToneForCheckIns", true),
             shareAnonymousUsage = prefs.getBoolean("shareAnonymousUsage", false),
             isDarkTheme = prefs.getBoolean("isDarkTheme", true),
+            themeMode = prefs.getInt("themeMode", if (prefs.getBoolean("isDarkTheme", true)) 0 else 1),
             aiEnergyBalance = prefs.getInt("aiEnergyBalance", 1240),
             checkedInToday = prefs.getBoolean("checkedInToday", false),
             streakDays = prefs.getInt("streakDays", 4),
@@ -151,6 +152,7 @@ class CadenceViewModel(
             .putBoolean("useVoiceToneForCheckIns", updated.useVoiceToneForCheckIns)
             .putBoolean("shareAnonymousUsage", updated.shareAnonymousUsage)
             .putBoolean("isDarkTheme", updated.isDarkTheme)
+            .putInt("themeMode", updated.themeMode)
             .putInt("aiEnergyBalance", updated.aiEnergyBalance)
             .putBoolean("checkedInToday", updated.checkedInToday)
             .putInt("streakDays", updated.streakDays)
@@ -443,13 +445,24 @@ class CadenceViewModel(
     private var profileJob: Job? = null
     private var mealsJob: Job? = null
 
+    /** Applies Dark / Light / Auto. For Auto, [systemDark] is the phone's current mode. */
+    fun applyThemeMode(mode: Int, systemDark: Boolean) {
+        val dark = when (mode) { 1 -> false; 2 -> systemDark; else -> true }
+        val style = if (dark) MochiVisualStyle.STUDIO_4K_OPTICAL else MochiVisualStyle.WARM_STUDIO_LUXE
+        if (_selectedVisualStyle.value != style) _selectedVisualStyle.value = style
+        val cur = _settings.value
+        if (cur.themeMode != mode || cur.isDarkTheme != dark) {
+            updateSettings { it.copy(themeMode = mode, isDarkTheme = dark) }
+        }
+    }
+
     fun setPreviewAccentCharacter(spec: CharacterSpec?) {
         _previewAccentCharacter.value = spec
     }
 
     fun selectVisualStyle(style: MochiVisualStyle) {
         _selectedVisualStyle.value = style
-        updateSettings { it.copy(isDarkTheme = !style.isLight) }
+        updateSettings { it.copy(isDarkTheme = !style.isLight, themeMode = if (style.isLight) 1 else 0) }
         characterController.transitionTo(CharacterRuntimeState.Reacting("happy"))
     }
 

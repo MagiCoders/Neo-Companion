@@ -80,7 +80,7 @@ fun CharacterPickerScreen(
     val textSecondary = MochiTokens.adaptiveTextSecondary(isDark)
     val cardBg = MochiTokens.adaptiveBgRaised(isDark)
     val borderCol = MochiTokens.adaptiveHairline(isDark)
-    val goldAccent = Color(0xFFE0B462)
+    val goldAccent = MochiTokens.gold
 
     var selectedCategory by remember { mutableStateOf(CharacterCategoryFilter.ALL) }
     var showGridView by remember { mutableStateOf(true) }
@@ -298,7 +298,7 @@ fun CharacterPickerScreen(
                                 Text(
                                     text = "Current",
                                     style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold),
-                                    color = Color(0xFF07090F)
+                                    color = MochiTokens.onAccent
                                 )
                             }
                         }
@@ -391,7 +391,7 @@ fun CharacterPickerScreen(
                                 Text(
                                     text = if (isCurrent) "Current companion" else "Choose ${pageCharacter.displayName}",
                                     style = MochiType.Body.copy(fontWeight = FontWeight.SemiBold),
-                                    color = Color(0xFF07090F)
+                                    color = MochiTokens.onAccent
                                 )
                             }
                         }
@@ -456,7 +456,7 @@ fun CharacterPickerScreen(
                                     Text(
                                         text = "Current",
                                         style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold),
-                                        color = Color(0xFF07090F)
+                                        color = MochiTokens.onAccent
                                     )
                                 }
                             }
@@ -480,7 +480,7 @@ fun CharacterPickerScreen(
                         Row(
                             modifier = Modifier
                                 .clip(MochiShapes.pill)
-                                .background(borderCol.copy(alpha = 0.45f))
+                                .background(MochiTokens.card2)
                                 .clickable { controller.react("wave") }
                                 .padding(horizontal = 10.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -517,7 +517,7 @@ fun CharacterPickerScreen(
                 Text(
                     text = if (selectedGridCharacter == activeCharacter) "Current companion" else "Choose ${selectedGridCharacter.displayName}",
                     style = MochiType.Body.copy(fontWeight = FontWeight.SemiBold),
-                    color = Color(0xFF07090F)
+                    color = MochiTokens.onAccent
                 )
             }
         }

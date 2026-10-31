@@ -185,7 +185,7 @@ fun ToolsGridScreen(
     val textSecondary = MochiTokens.adaptiveTextSecondary(isDark)
     val cardBg = MochiTokens.adaptiveBgRaised(isDark)
     val borderCol = MochiTokens.adaptiveHairline(isDark)
-    val goldAccent = Color(0xFFE0B462)
+    val goldAccent = MochiTokens.gold
     val mintAccent = Color(0xFF56C296)
 
     Column(
@@ -336,13 +336,13 @@ fun ToolsGridScreen(
                         Icon(
                             imageVector = Icons.Outlined.CameraAlt,
                             contentDescription = null,
-                            tint = Color(0xFF07090F),
+                            tint = MochiTokens.onAccent,
                             modifier = Modifier.size(16.dp)
                         )
                         Text(
                             text = "Open camera",
                             style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold),
-                            color = Color(0xFF07090F)
+                            color = MochiTokens.onAccent
                         )
                     }
                 }
@@ -370,7 +370,7 @@ fun ToolsGridScreen(
                         )
                         // Lemon slice (top-right)
                         drawCircle(
-                            color = Color(0xFFE0B462),
+                            color = MochiTokens.gold,
                             radius = size.minDimension * 0.14f,
                             center = Offset(size.width * 0.62f, size.height * 0.38f)
                         )
@@ -1010,7 +1010,7 @@ fun SingleToolScreen(
                         Text(
                             text = "Read steps",
                             style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold),
-                            color = Color(0xFF07090F)
+                            color = MochiTokens.onAccent
                         )
                     }
                 }
@@ -1122,7 +1122,7 @@ fun SingleToolScreen(
             Text(
                 text = tool.conversionMode?.actionLabel ?: "Generate recipes",
                 style = MochiType.Body.copy(fontWeight = FontWeight.SemiBold),
-                color = Color(0xFF07090F)
+                color = MochiTokens.onAccent
             )
         }
     }
@@ -1460,7 +1460,7 @@ fun ToolResultScreen(
                 Text(
                     text = "Save",
                     style = MochiType.Body,
-                    color = Color(0xFF07090F)
+                    color = MochiTokens.onAccent
                 )
             }
         }

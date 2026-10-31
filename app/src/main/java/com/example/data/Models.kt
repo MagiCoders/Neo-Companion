@@ -69,6 +69,8 @@ data class MochiPersistentSettings(
     val useVoiceToneForCheckIns: Boolean = true,
     val shareAnonymousUsage: Boolean = false,
     val isDarkTheme: Boolean = true,
+    /** 0 = Dark, 1 = Light, 2 = Auto (follow the phone). */
+    val themeMode: Int = 0,
     val aiEnergyBalance: Int = 1240,
     val checkedInToday: Boolean = false,
     val streakDays: Int = 4,
