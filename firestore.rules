@@ -71,7 +71,8 @@ service cloud.firestore {
         'createdAt', 'updatedAt'
       ];
       return data.keys().hasAll(requiredFields)
-        && data.keys().hasOnly(requiredFields)
+        && data.keys().hasOnly(requiredFields.concat(['creditsResetAt']))
+        && (!('creditsResetAt' in data) || data.creditsResetAt is timestamp)
         && data.userId is string && data.userId == userId
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100
         && data.email is string && data.email.size() <= 150
@@ -129,16 +130,37 @@ service cloud.firestore {
     // (Play Billing verification / daily refill via the Admin SDK, which bypasses these rules).
     function protectedFieldsUnchanged() {
       return request.resource.data.isProSubscriber == resource.data.isProSubscriber
-        && request.resource.data.aiCreditsMax == resource.data.aiCreditsMax
         && request.resource.data.email == resource.data.email;
+    }
+
+    // The daily AI allowance (100). Refilling is allowed at most once every 20 hours, and only
+    // up to the allowance; the reset time is stamped by the server so the phone clock can't cheat.
+    function sameResetTime() {
+      return ('creditsResetAt' in request.resource.data) == ('creditsResetAt' in resource.data)
+        && (!('creditsResetAt' in resource.data) || request.resource.data.creditsResetAt == resource.data.creditsResetAt);
+    }
+
+    function creditsSpentOnly() {
+      return request.resource.data.aiCreditsMax == resource.data.aiCreditsMax
+        && request.resource.data.aiCreditsRemaining <= resource.data.aiCreditsRemaining
+        && sameResetTime();
+    }
+
+    function isDailyRefill() {
+      let d = request.resource.data;
+      let o = resource.data;
+      return d.aiCreditsMax == 100
+        && o.aiCreditsMax <= 100
+        && d.aiCreditsRemaining == d.aiCreditsMax
+        && d.creditsResetAt == request.time
+        && (!('creditsResetAt' in o) || request.time > o.creditsResetAt + duration.value(20, 'h'));
     }
 
     // Credits can only go down from the client; progress can only grow by a small step per write.
     function progressChangesAreSane() {
       let d = request.resource.data;
       let o = resource.data;
-      return d.aiCreditsRemaining <= o.aiCreditsRemaining
-        && d.xp >= o.xp && d.xp - o.xp <= 1000
+      return d.xp >= o.xp && d.xp - o.xp <= 1000
         && d.goldCoins - o.goldCoins <= 500
         && d.level >= o.level && d.level - o.level <= 1
         && d.moneySavedDollars >= o.moneySavedDollars && d.moneySavedDollars - o.moneySavedDollars <= 500;
@@ -150,8 +172,8 @@ service cloud.firestore {
         && isValidId(userId)
         && isValidUserProfile(request.resource.data, userId)
         && request.resource.data.isProSubscriber == false
-        && request.resource.data.aiCreditsRemaining <= 15
-        && request.resource.data.aiCreditsMax == 15
+        && request.resource.data.aiCreditsRemaining <= 100
+        && request.resource.data.aiCreditsMax == 100
         && request.resource.data.xp == 0
         && request.resource.data.goldCoins == 0
         && request.resource.data.level == 1
@@ -161,7 +183,8 @@ service cloud.firestore {
         && request.resource.data.userId == resource.data.userId
         && request.resource.data.createdAt == resource.data.createdAt
         && protectedFieldsUnchanged()
-        && progressChangesAreSane();
+        && progressChangesAreSane()
+        && (creditsSpentOnly() || isDailyRefill());
       allow delete: if isOwner(userId);
 
       match /quests/{questId} {

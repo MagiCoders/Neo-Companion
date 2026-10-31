@@ -93,8 +93,9 @@ data class UserProfile(
     val goldCoins: Int = 0,
     val streakDays: Int = 0,
     val moneySavedDollars: Int = 0,
-    val aiCreditsRemaining: Int = 15,
-    val aiCreditsMax: Int = 15,
+    val aiCreditsRemaining: Int = 0,
+    val aiCreditsMax: Int = 100,
+    val creditsResetAtMillis: Long = 0L,
     val isProSubscriber: Boolean = false,
     val createdAtMillis: Long = System.currentTimeMillis(),
     val updatedAtMillis: Long = System.currentTimeMillis()

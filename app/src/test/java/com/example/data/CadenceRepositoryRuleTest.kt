@@ -53,7 +53,7 @@ class CadenceRepositoryRuleTest : FirestoreEmulatorTestBase() {
         assertEquals(uid, profile.userId)
         assertEquals("Samira", profile.displayName)
         assertEquals("Mochi", profile.companionName)
-        assertEquals(15, profile.aiCreditsRemaining)
+        assertEquals(100, profile.aiCreditsRemaining)
 
         val observedProfile = runRepoBlocking {
             repo.observeUserProfile(uid).first { it != null }
@@ -83,8 +83,17 @@ class CadenceRepositoryRuleTest : FirestoreEmulatorTestBase() {
         val refill = runCatching { awaitTask(doc.update("aiCreditsRemaining", 9999)) }
         assertTrue("client must not be able to raise credits", refill.isFailure)
 
-        val spend = runCatching { awaitTask(doc.update(mapOf("aiCreditsRemaining" to 14))) }
+        val spend = runCatching { awaitTask(doc.update(mapOf("aiCreditsRemaining" to 99))) }
         assertTrue("spending one credit is allowed", spend.isSuccess)
+
+        // A refill right after account creation is refused (once per 20 hours, server clock).
+        val early = runCatching {
+            awaitTask(doc.update(mapOf("aiCreditsRemaining" to 100, "creditsResetAt" to com.google.firebase.firestore.FieldValue.serverTimestamp())))
+        }
+        assertTrue("refill is limited to once a day", early.isFailure)
+
+        val bigger = runCatching { awaitTask(doc.update(mapOf("aiCreditsMax" to 500, "aiCreditsRemaining" to 500))) }
+        assertTrue("allowance can't be raised by the client", bigger.isFailure)
     }
 
     @Test

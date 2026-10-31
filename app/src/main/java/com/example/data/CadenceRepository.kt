@@ -77,8 +77,9 @@ class CadenceRepository(
                     "goldCoins" to 0,
                     "streakDays" to 0,
                     "moneySavedDollars" to 0,
-                    "aiCreditsRemaining" to 15,
-                    "aiCreditsMax" to 15,
+                    "aiCreditsRemaining" to DAILY_AI_CREDITS,
+                    "aiCreditsMax" to DAILY_AI_CREDITS,
+                    "creditsResetAt" to FieldValue.serverTimestamp(),
                     "isProSubscriber" to false,
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp()
@@ -320,6 +321,33 @@ class CadenceRepository(
         }
     }
 
+    /**
+     * Refills the daily AI allowance when the last refill was more than 20 hours ago (or the account
+     * still has the old, smaller allowance). Firestore rules enforce the same limits server-side.
+     * @return true if a refill was written.
+     */
+    suspend fun refillDailyCreditsIfDue(userId: String, profile: UserProfile): Boolean {
+        val due = profile.aiCreditsMax < DAILY_AI_CREDITS ||
+            System.currentTimeMillis() - profile.creditsResetAtMillis > 20L * 60 * 60 * 1000
+        if (!due || profile.aiCreditsRemaining >= DAILY_AI_CREDITS) return false
+        val path = "users/$userId"
+        return try {
+            firestore.collection("users").document(userId).update(
+                mapOf(
+                    "aiCreditsRemaining" to DAILY_AI_CREDITS,
+                    "aiCreditsMax" to DAILY_AI_CREDITS,
+                    "creditsResetAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+            true
+        } catch (e: Exception) {
+            // Not due yet according to the server clock: fine, try again later.
+            android.util.Log.i("CadenceRepository", "Credit refill not applied: ${e.javaClass.simpleName}")
+            false
+        }
+    }
+
     suspend fun consumeAiCreditOrThrow(
         userId: String,
         currentProfile: UserProfile
@@ -378,8 +406,9 @@ class CadenceRepository(
             goldCoins = (getLong("goldCoins") ?: 0L).toInt(),
             streakDays = (getLong("streakDays") ?: 1L).toInt(),
             moneySavedDollars = (getLong("moneySavedDollars") ?: 0L).toInt(),
-            aiCreditsRemaining = (getLong("aiCreditsRemaining") ?: 15L).toInt(),
-            aiCreditsMax = (getLong("aiCreditsMax") ?: 15L).toInt(),
+            aiCreditsRemaining = (getLong("aiCreditsRemaining") ?: 0L).toInt(),
+            aiCreditsMax = (getLong("aiCreditsMax") ?: DAILY_AI_CREDITS.toLong()).toInt(),
+            creditsResetAtMillis = getTimestamp("creditsResetAt")?.toDate()?.time ?: 0L,
             isProSubscriber = getBoolean("isProSubscriber") ?: false,
             createdAtMillis = getTimestamp("createdAt")?.toDate()?.time ?: System.currentTimeMillis(),
             updatedAtMillis = getTimestamp("updatedAt")?.toDate()?.time ?: System.currentTimeMillis()
@@ -418,3 +447,6 @@ class CadenceRepository(
         )
     }
 }
+
+/** Daily AI allowance for free accounts (testing value; tune once real usage costs are known). */
+const val DAILY_AI_CREDITS = 100

@@ -2,6 +2,7 @@ package com.example.ai
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -66,7 +67,7 @@ class VoiceCommandService(
     companion object {
         private const val TAG = "VoiceCommandService"
         private val WAKE_WORD_REGEX = Regex(
-            "(?i)\\b(hi|hey|hello|okay|ok)\\s+(mochi|elena|kaito|marco)\\b[,.!?\\s]*"
+            "(?i)\\b(hi|hey|hello|okay|ok)\\s+(mochi|mochie|mochy|elena|kaito|marco)\\b[,.!?\\s]*"
         )
         private val ABORT_COMMAND_REGEX = Regex(
             "(?i)^(stop|cancel|undo|abort|wait|don't|do not|never mind|nevermind)[.!]?$"
@@ -112,6 +113,13 @@ class VoiceCommandService(
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var speechRecognizer: SpeechRecognizer? = null
+    /** Android 13+: on-device recogniser running one continuous, segmented session (no restart beeps). */
+    private var onDeviceRecognizer: SpeechRecognizer? = null
+    private var activeRecognizer: SpeechRecognizer? = null
+    private var onDeviceFailed = false
+
+    /** Called when only the wake phrase was heard ("Hey Mochi") — e.g. to open a live voice call. */
+    var onWakeWordOnly: (() -> Unit)? = null
     private var countdownJob: Job? = null
     private var restartListeningJob: Job? = null
     private var awaitReplyJob: Job? = null
@@ -403,11 +411,25 @@ class VoiceCommandService(
         restartListeningJob?.cancel()
         if (sessionKind != null) cancelSession(destroy = false)
         try {
-            val recognizer = speechRecognizer ?: SpeechRecognizer.createSpeechRecognizer(appContext).also {
-                it.setRecognitionListener(createRecognitionListener())
-                speechRecognizer = it
+            val continuous = kind == SessionKind.WAKE && canUseContinuousSession()
+            val recognizer = if (continuous) {
+                onDeviceRecognizer ?: SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext).also {
+                    it.setRecognitionListener(createRecognitionListener())
+                    onDeviceRecognizer = it
+                }
+            } else {
+                speechRecognizer ?: SpeechRecognizer.createSpeechRecognizer(appContext).also {
+                    it.setRecognitionListener(createRecognitionListener())
+                    speechRecognizer = it
+                }
             }
+            activeRecognizer = recognizer
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                if (continuous && Build.VERSION.SDK_INT >= 33) {
+                    // One long session split on pauses: listens continuously without stop/start cycles.
+                    putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS)
+                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1_200L)
+                }
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
@@ -429,6 +451,10 @@ class VoiceCommandService(
         }
     }
 
+    private fun canUseContinuousSession(): Boolean =
+        Build.VERSION.SDK_INT >= 33 && !onDeviceFailed &&
+            runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext) }.getOrDefault(false)
+
     private fun cancelSession(destroy: Boolean) {
         val hadSession = sessionKind != null
         sessionKind = null
@@ -438,13 +464,16 @@ class VoiceCommandService(
         _livePartialTranscript.value = ""
         _micRmsDb.value = 0f
         try {
-            if (hadSession) speechRecognizer?.cancel()
+            if (hadSession) activeRecognizer?.cancel()
             if (destroy) {
                 speechRecognizer?.destroy()
+                onDeviceRecognizer?.destroy()
                 speechRecognizer = null
+                onDeviceRecognizer = null
             }
         } catch (_: Throwable) {
             speechRecognizer = null
+            onDeviceRecognizer = null
         }
     }
 
@@ -517,8 +546,16 @@ class VoiceCommandService(
                     hasRecordPermission = false
                     _lastError.value = "Microphone permission is off."
                 }
+                12, 13 /* language not supported / unavailable on-device */ -> {
+                    onDeviceFailed = true
+                    onSessionEnded()
+                    reevaluate(delayMs = 500L)
+                }
                 SpeechRecognizer.ERROR_RECOGNIZER_BUSY,
-                SpeechRecognizer.ERROR_CLIENT -> onHardError("busy/client ($error)", destroy = true)
+                SpeechRecognizer.ERROR_CLIENT -> {
+                    if (activeRecognizer === onDeviceRecognizer && onDeviceRecognizer != null) onDeviceFailed = true
+                    onHardError("busy/client ($error)", destroy = true)
+                }
                 else -> onHardError("error $error", destroy = false)
             }
         }
@@ -578,8 +615,8 @@ class VoiceCommandService(
                     if (cleaned.length >= 2) {
                         deliverCommand(cleaned)
                     } else {
-                        // Just "Hey Elena" — open a command session for the actual request.
-                        startSession(SessionKind.COMMAND)
+                        // Just "Hey Mochi" — open a live call if the app wants that, else listen for the request.
+                        onWakeWordOnly?.invoke() ?: startSession(SessionKind.COMMAND)
                     }
                 }
                 else -> {
@@ -590,6 +627,28 @@ class VoiceCommandService(
         }
 
         override fun onEvent(eventType: Int, params: Bundle?) {}
+
+        // Android 13+ continuous session: each pause delivers a segment; the session keeps running.
+        override fun onSegmentResults(segmentResults: Bundle) {
+            val text = segmentResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim().orEmpty()
+            if (text.isEmpty()) return
+            if (_pendingAction.value != null && ABORT_COMMAND_REGEX.matches(text)) {
+                cancelPendingAction()
+                return
+            }
+            if (!WAKE_WORD_REGEX.containsMatchIn(text)) return   // ignore everything without her name
+            val cleaned = text.replace(WAKE_WORD_REGEX, " ").trim()
+            cancelSession(destroy = false)
+            if (cleaned.length >= 2) deliverCommand(cleaned)
+            else onWakeWordOnly?.invoke() ?: startSession(SessionKind.COMMAND)
+        }
+
+        override fun onEndOfSegmentedSession() {
+            if (sessionKind == SessionKind.WAKE) {
+                onSessionEnded()
+                reevaluate(delayMs = WAKE_RESTART_MS)
+            }
+        }
     }
 
     /** Understands one utterance. Throws [AiUnavailableException] when the AI can't answer. */

@@ -381,7 +381,15 @@ class CadenceViewModel(
         }
     }
 
+    init {
+        // "Hey Mochi" on its own opens a live voice call.
+        voiceCommandService.onWakeWordOnly = {
+            if (!liveConversation.isActive()) toggleLiveConversation()
+        }
+    }
+
     override fun onCleared() {
+        voiceCommandService.onWakeWordOnly = null
         liveConversation.stop()
         voiceCommandService.setLiveCallActive(false)
         super.onCleared()
@@ -719,9 +727,14 @@ class CadenceViewModel(
 
         profileJob = viewModelScope.launch {
             try {
+                var refillChecked = false
                 repository.observeUserProfile(userId).collectLatest { profile ->
                     if (profile != null) {
                         _userProfile.value = profile
+                        if (!refillChecked) {
+                            refillChecked = true
+                            repository.refillDailyCreditsIfDue(userId, profile)
+                        }
                     }
                 }
             } catch (_: Exception) {

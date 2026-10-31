@@ -25,7 +25,9 @@ enum class CharacterSpec(
     val speechRate: Float,
     val defaultSuggestions: List<String>,
     /** True when [assetFile] is a real, textured 3D model rendered with Filament. */
-    val isRealtime3D: Boolean = false
+    val isRealtime3D: Boolean = false,
+    /** Rotation that makes the model face the camera. */
+    val modelYawDeg: Float = 0f
 ) {
     MOCHI(
         id = "mochi",
@@ -41,7 +43,8 @@ enum class CharacterSpec(
             "What's for dinner tonight?",
             "I need to calm down"
         ),
-        isRealtime3D = true
+        isRealtime3D = true,
+        modelYawDeg = -90f // the Tripo export faces +X; turn it to face the viewer
     ),
     ELENA(
         id = "elena",

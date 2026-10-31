@@ -69,6 +69,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -442,8 +443,9 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
                             quickAskOpen = true
                             controller.react("wave")
                         },
+                        onDragStart = { showDismissTarget() },
                         onDrag = { dx, dy -> dragBy(dx, dy) },
-                        onDragEnd = { snapToEdge() },
+                        onDragEnd = { finishDrag() },
                         onInputFocusChanged = { focused -> setWindowFocusable(focused) },
                         onSendPrompt = { text ->
                             quickAskOpen = false
@@ -491,6 +493,75 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
         lp.x = (lp.x + dx.roundToInt()).coerceIn(-view.width / 3, screenW - view.width * 2 / 3)
         lp.y = (lp.y - dy.roundToInt()).coerceIn(0, (screenH - view.height).coerceAtLeast(0))
         try { wm.updateViewLayout(view, lp) } catch (_: Throwable) {}
+        val near = overDismissTarget()
+        if (near != nearDismiss) {
+            nearDismiss = near
+            if (near) view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        }
+    }
+
+    // ---- Drag to the bottom circle to close (like Android chat heads) ----------------------
+
+    private var dismissView: ComposeView? = null
+    private var nearDismiss by mutableStateOf(false)
+
+    private fun showDismissTarget() {
+        if (dismissView != null) return
+        val wm = windowManager ?: return
+        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
+        val lp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            (170 * resources.displayMetrics.density).roundToInt(),
+            type,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            title = "Companion dismiss target"
+        }
+        val v = ComposeView(this).apply {
+            setViewTreeLifecycleOwner(this@FloatingCompanionService)
+            setViewTreeViewModelStoreOwner(this@FloatingCompanionService)
+            setViewTreeSavedStateRegistryOwner(this@FloatingCompanionService)
+            setContent { DismissTarget(active = nearDismiss) }
+        }
+        try {
+            wm.addView(v, lp)
+            dismissView = v
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun hideDismissTarget() {
+        dismissView?.let { v -> try { windowManager?.removeView(v) } catch (_: Throwable) {} }
+        dismissView = null
+        nearDismiss = false
+    }
+
+    /** True when the companion's centre is over the bottom-centre circle. */
+    private fun overDismissTarget(): Boolean {
+        val view = composeView ?: return false
+        val lp = layoutParams ?: return false
+        val dm = resources.displayMetrics
+        val leftX = if (lp.gravity and Gravity.END == Gravity.END) dm.widthPixels - lp.x - view.width else lp.x
+        val cx = leftX + view.width / 2f
+        val cy = dm.heightPixels - lp.y - view.height / 2f
+        val tx = dm.widthPixels / 2f
+        val ty = dm.heightPixels - 85 * dm.density
+        return kotlin.math.hypot(cx - tx, cy - ty) < 95 * dm.density
+    }
+
+    private fun finishDrag() {
+        if (overDismissTarget()) {
+            composeView?.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+            hideDismissTarget()
+            stopSelf()
+            return
+        }
+        hideDismissTarget()
+        snapToEdge()
     }
 
     private fun snapToEdge() {
@@ -507,6 +578,7 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
     }
 
     override fun onDestroy() {
+        hideDismissTarget()
         voice.unbindCallbacks(OWNER)
         if (micHostAcquired) voice.releaseHost(OWNER)
         bubbleHideJob?.cancel()
@@ -588,8 +660,8 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
 // Overlay UI
 // ----------------------------------------------------------------------------------------------
 
-private val OverlayCharacterWidth = 150.dp
-private val OverlayCharacterHeight = 150.dp
+private val OverlayCharacterWidth = 84.dp
+private val OverlayCharacterHeight = 84.dp
 
 @Composable
 private fun OverlayContent(
@@ -604,6 +676,7 @@ private fun OverlayContent(
     dockedRight: Boolean,
     onTapCharacter: () -> Unit,
     onLongPressCharacter: () -> Unit,
+    onDragStart: () -> Unit,
     onDrag: (Float, Float) -> Unit,
     onDragEnd: () -> Unit,
     onInputFocusChanged: (Boolean) -> Unit,
@@ -685,6 +758,7 @@ private fun OverlayContent(
                 }
                 .pointerInput(Unit) {
                     detectDragGestures(
+                        onDragStart = { onDragStart() },
                         onDragEnd = onDragEnd,
                         onDragCancel = onDragEnd,
                         onDrag = { change, amount ->
@@ -903,5 +977,27 @@ private fun OverlayPillButton(label: String, bg: Color, fg: Color, modifier: Mod
         contentAlignment = Alignment.Center
     ) {
         Text(label, style = MochiType.Label.copy(fontWeight = FontWeight.W600), color = fg)
+    }
+}
+
+/** The bottom-centre "drop here to close" circle shown while dragging the companion. */
+@Composable
+private fun DismissTarget(active: Boolean) {
+    val scale by androidx.compose.animation.core.animateFloatAsState(if (active) 1.25f else 1f, label = "dismiss_scale")
+    Box(Modifier.fillMaxSize().drawBehind {
+        drawRect(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.45f))))
+    }, contentAlignment = Alignment.BottomCenter) {
+        Box(
+            modifier = Modifier
+                .padding(bottom = 52.dp)
+                .size(64.dp)
+                .scale(scale)
+                .clip(CircleShape)
+                .background(if (active) Color(0xFFD93F45) else Color(0xCC1C1E25))
+                .border(2.dp, Color.White.copy(alpha = if (active) 0.9f else 0.5f), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(Icons.Outlined.Close, contentDescription = "Drop here to close", tint = Color.White, modifier = Modifier.size(28.dp))
+        }
     }
 }

@@ -261,7 +261,7 @@ private fun Realtime3DStage(
         Canvas(Modifier.fillMaxSize()) {
             renderCharacterRimAndGroundShadow(runtimeState, pose, character.accent, phase, fullBodyStandingMode, showAura)
         }
-        Mochi3DView(assetPath = character.assetFile, controller = controller, modifier = Modifier.fillMaxSize())
+        Mochi3DView(assetPath = character.assetFile, controller = controller, modifier = Modifier.fillMaxSize(), yawOffsetDeg = character.modelYawDeg)
         CompanionVfxLayer(state = runtimeState, accent = character.accent, micLevel = pose.micLevel, modifier = Modifier.fillMaxSize())
     }
 }
