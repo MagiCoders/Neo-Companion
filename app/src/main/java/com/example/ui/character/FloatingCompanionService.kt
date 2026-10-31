@@ -298,20 +298,36 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
             bubbleText = null
             controller.transitionTo(CharacterRuntimeState.Thinking)
             try {
-                val turn = voice.processNaturalLanguageCommand(clean, activeCharacter)
-                val spoken = if (turn.spokenConfirmation.isNotBlank() &&
-                    turn.actionType != CompanionActionType.NONE
-                ) turn.spokenConfirmation else turn.message
+                val userName = com.example.security.SecureStore(applicationContext).getString("userName")
+                val turn = voice.processNaturalLanguageCommand(clean, activeCharacter, userName)
+                val prep = when (turn.actionType) {
+                    CompanionActionType.NONE, CompanionActionType.SPEAK_LOUD,
+                    CompanionActionType.NAVIGATE_ROUTE, CompanionActionType.WHATS_PLAYING -> null
+                    else -> com.example.actions.ActionExecutor(applicationContext).prepare(turn)
+                }
+                if (prep is com.example.actions.Preparation.Blocked) {
+                    showBubble(prep.outcome.spoken, autoHideMs = 9_000L)
+                    controller.speakWithLipSync(applicationContext, ttsEngine, prep.outcome.spoken, activeCharacter)
+                    return@launch
+                }
                 showBubble(turn.message, autoHideMs = 9_000L)
-                controller.speakWithLipSync(applicationContext, ttsEngine, spoken, activeCharacter)
+                controller.speakWithLipSync(applicationContext, ttsEngine, turn.message, activeCharacter)
                 when (turn.actionType) {
                     CompanionActionType.NONE, CompanionActionType.SPEAK_LOUD -> Unit
-                    CompanionActionType.WHATS_PLAYING -> executeTurn(turn)
-                    else -> voice.scheduleActionWithUndoWindow(turn, durationSeconds = 3) { executeAction(it) }
+                    CompanionActionType.NAVIGATE_ROUTE, CompanionActionType.WHATS_PLAYING -> executeTurn(turn)
+                    else -> voice.scheduleActionWithUndoWindow(
+                        turn,
+                        durationSeconds = 3,
+                        titleOverride = (prep as com.example.actions.Preparation.Ready).action.title
+                    ) { executeAction(it) }
                 }
+            } catch (e: com.example.ai.AiUnavailableException) {
+                showBubble(e.message ?: "Please try again.")
+                controller.transitionTo(CharacterRuntimeState.Idle)
             } catch (e: Exception) {
-                Log.w(TAG, "Overlay prompt failed", e)
-                showBubble("Sorry, I couldn't reach the AI just now. Try again in a moment.")
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.w(TAG, "Overlay prompt failed: ${e.javaClass.simpleName}")
+                showBubble("Something went wrong on my side. Please try again.")
                 controller.transitionTo(CharacterRuntimeState.Idle)
             } finally {
                 isThinking = false
@@ -323,13 +339,14 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
     private fun executeAction(pending: PendingVoiceAction) = executeTurn(pending.turn)
 
     private fun executeTurn(turn: com.example.data.CompanionChatTurn) {
-        OmnichannelMediaBridge.autoExecuteCompanionAction(
+        val outcome = OmnichannelMediaBridge.autoExecuteCompanionAction(
             context = applicationContext,
             tts = ttsEngine,
             turn = turn,
             character = activeCharacter,
             onNavigateHashRoute = { openApp() }
         )
+        if (outcome.spoken.isNotBlank()) showBubble(outcome.spoken, 6_000L)
     }
 
     private fun openApp() {

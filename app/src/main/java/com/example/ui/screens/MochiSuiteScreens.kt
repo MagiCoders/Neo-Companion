@@ -91,7 +91,13 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import com.example.data.LibraryEntry
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.material.icons.outlined.Restaurant
+import androidx.compose.material.icons.outlined.CheckCircleOutline
 import com.example.data.MochiPersistentSettings
+import com.example.data.UserProfile
 import com.example.data.QuestCategory
 import com.example.data.QuestItem
 import com.example.ui.character.CharacterController
@@ -244,19 +250,20 @@ private fun MochiBottomNavItem(
 }
 
 /**
- * Library Screen matching Library.png & Library - light.png.
+ * Library: everything you really made — recipes, quests and files. Nothing here is sample content.
  */
 @Composable
 fun LibraryScreen(
+    entries: List<LibraryEntry>,
     onOpenSearch: () -> Unit,
     onOpenProfile: () -> Unit,
-    onOpenFridgeChef: () -> Unit,
+    onOpenEntry: (LibraryEntry) -> Unit,
     onOpenTools: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val p = rememberSuiteColors()
-    val filters = listOf("All", "Chats", "Recipes", "Bills", "Files")
-    var selectedFilter by remember { mutableStateOf("All") }
+    var selected by remember { mutableStateOf<LibraryEntry.Kind?>(null) }
+    val shown = entries.filter { selected == null || it.kind == selected }
 
     Column(
         modifier = modifier
@@ -266,191 +273,174 @@ fun LibraryScreen(
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(MochiSpacing.md)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Library",
-                style = MochiType.Display,
-                color = p.textPrimary
-            )
-
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("Library", style = MochiType.Display, color = p.textPrimary)
             Row(horizontalArrangement = Arrangement.spacedBy(MochiSpacing.xs)) {
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clip(MochiShapes.pill)
-                        .background(p.card)
-                        .border(1.dp, p.hairline, MochiShapes.pill)
-                        .clickable { onOpenSearch() }
-                        .testTag("library_search_button"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Search,
-                        contentDescription = "Search library",
-                        tint = p.textPrimary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clip(MochiShapes.pill)
-                        .background(p.card)
-                        .border(1.dp, p.hairline, MochiShapes.pill)
-                        .clickable { onOpenProfile() }
-                        .testTag("library_profile_button"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Person,
-                        contentDescription = "Profile",
-                        tint = p.textPrimary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
+                RoundIconButton(Icons.Outlined.Search, "Search library", p, onOpenSearch)
+                RoundIconButton(Icons.Outlined.Person, "Profile", p, onOpenProfile)
+            }
+        }
+        Text("Everything you and your companions made.", style = MochiType.Body, color = p.textSecondary)
+
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(MochiSpacing.xs)) {
+            KindChip("All", entries.size, selected == null, p) { selected = null }
+            LibraryEntry.Kind.entries.forEach { kind ->
+                KindChip(kind.label, entries.count { it.kind == kind }, selected == kind, p) { selected = kind }
             }
         }
 
-        Text(
-            text = "Everything you and your companions made.",
-            style = MochiType.Body,
-            color = p.textSecondary
-        )
+        if (shown.isEmpty()) {
+            EmptyLibraryCard(p, onOpenTools)
+        } else {
+            LibraryEntryList(shown, p, onOpenEntry)
+        }
+        Spacer(Modifier.height(MochiSpacing.md))
+    }
+}
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(MochiSpacing.xs)
-        ) {
-            filters.forEach { filter ->
-                val isSelected = selectedFilter == filter
-                Box(
-                    modifier = Modifier
-                        .height(38.dp)
-                        .clip(MochiShapes.pill)
-                        .background(if (isSelected) p.goldPillBg else p.card)
-                        .border(
-                            1.dp,
-                            if (isSelected) p.gold else p.hairline,
-                            MochiShapes.pill
-                        )
-                        .clickable { selectedFilter = filter }
-                        .padding(horizontal = 18.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = filter,
-                        style = MochiType.Label.copy(fontWeight = FontWeight.Medium),
-                        color = if (isSelected) p.gold else p.textPrimary
+/** Search across the Library. Results come only from your own items. */
+@Composable
+fun SearchScreen(
+    entries: List<LibraryEntry>,
+    onBack: () -> Unit,
+    onOpenEntry: (LibraryEntry) -> Unit,
+    onAskCompanion: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val p = rememberSuiteColors()
+    val accent = LocalCharacterAccent.current
+    var query by rememberSaveable { mutableStateOf("") }
+    val q = query.trim()
+    val results = if (q.isEmpty()) emptyList() else entries.filter {
+        it.title.contains(q, ignoreCase = true) || it.subtitle.contains(q, ignoreCase = true)
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .imePadding()
+            .padding(horizontal = MochiSpacing.screenPadding, vertical = MochiSpacing.sm)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(MochiSpacing.md)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(MochiSpacing.sm)) {
+            Row(
+                Modifier.weight(1f).height(48.dp).clip(MochiShapes.pill).background(p.card)
+                    .border(1.dp, p.hairline, MochiShapes.pill).padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Outlined.Search, null, tint = p.textSecondary, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(10.dp))
+                Box(Modifier.weight(1f)) {
+                    if (query.isEmpty()) Text("Search recipes, quests, files", style = MochiType.Body, color = p.textTertiary)
+                    BasicTextField(
+                        value = query,
+                        onValueChange = { query = it.take(100) },
+                        singleLine = true,
+                        textStyle = MochiType.Body.copy(color = p.textPrimary),
+                        cursorBrush = SolidColor(accent),
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
+                if (query.isNotEmpty()) {
+                    Icon(Icons.Outlined.Close, "Clear", tint = p.textSecondary, modifier = Modifier.size(18.dp).clickable { query = "" })
+                }
             }
+            Text("Cancel", style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold), color = p.gold, modifier = Modifier.clickable(onClick = onBack))
         }
 
-        Text(
-            text = "Today",
-            style = MochiType.Label,
-            color = p.textSecondary
-        )
-
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(MochiShapes.card)
-                .background(p.card)
-                .border(1.dp, p.hairline, MochiShapes.card)
-        ) {
-            LibraryItemRow(
-                icon = Icons.Outlined.ChatBubbleOutline,
-                iconTint = MochiTokens.accentElena,
-                title = "Planned tomorrow’s errands",
-                subtitle = "Chat with Elena",
-                time = "9:40 PM",
-                palette = p,
-                onClick = {}
-            )
-            HairlineDivider(p.hairline)
-            LibraryItemRow(
-                icon = Icons.Outlined.RestaurantMenu,
-                iconTint = MochiTokens.accentMarco,
-                title = "Lemon spinach pasta",
-                subtitle = "Recipe · from your fridge photo",
-                time = "7:15 PM",
-                palette = p,
-                onClick = onOpenFridgeChef
-            )
-            HairlineDivider(p.hairline)
-            LibraryItemRow(
-                icon = Icons.Outlined.Description,
-                iconTint = MochiTokens.accentKaito,
-                title = "Lease agreement.pdf",
-                subtitle = "File · made from 4 photos",
-                time = "2:02 PM",
-                palette = p,
-                onClick = onOpenTools
-            )
+        if (q.isNotEmpty()) {
+            Row(
+                Modifier.fillMaxWidth().clip(MochiShapes.card).background(accent.copy(alpha = 0.12f))
+                    .border(1.dp, accent.copy(alpha = 0.35f), MochiShapes.card).clickable { onAskCompanion(q) }.padding(MochiSpacing.md),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Ask your companion about \"$q\"", style = MochiType.Body.copy(fontWeight = FontWeight.SemiBold), color = p.textPrimary)
+                    Text("Get an answer instead of a list", style = MochiType.Label, color = p.textSecondary)
+                }
+                Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = p.textSecondary)
+            }
+            if (results.isEmpty()) {
+                Text("Nothing in your Library matches \"$q\".", style = MochiType.Body, color = p.textSecondary)
+            } else {
+                LibraryEntryList(results, p, onOpenEntry)
+            }
+        } else if (entries.isEmpty()) {
+            Text("Your Library is empty. Recipes, quests and converted files will show up here.", style = MochiType.Body, color = p.textSecondary)
         }
+    }
+}
 
-        Text(
-            text = "This week",
-            style = MochiType.Label,
-            color = p.textSecondary
-        )
-
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(MochiShapes.card)
-                .background(p.card)
-                .border(1.dp, p.hairline, MochiShapes.card)
-        ) {
+@Composable
+private fun LibraryEntryList(items: List<LibraryEntry>, p: SuitePalette, onOpen: (LibraryEntry) -> Unit) {
+    Column(Modifier.fillMaxWidth().clip(MochiShapes.card).background(p.card).border(1.dp, p.hairline, MochiShapes.card)) {
+        items.forEachIndexed { i, e ->
             LibraryItemRow(
-                icon = Icons.Outlined.ReceiptLong,
-                iconTint = p.gold,
-                title = "Dinner at Rosa's",
-                subtitle = "Bill split · 4 people · 1 unpaid",
-                time = "Thu",
+                icon = when (e.kind) {
+                    LibraryEntry.Kind.RECIPE -> Icons.Outlined.Restaurant
+                    LibraryEntry.Kind.QUEST -> Icons.Outlined.CheckCircleOutline
+                    LibraryEntry.Kind.FILE -> Icons.Outlined.Description
+                },
+                iconTint = when (e.kind) {
+                    LibraryEntry.Kind.RECIPE -> p.gold
+                    LibraryEntry.Kind.QUEST -> LocalCharacterAccent.current
+                    LibraryEntry.Kind.FILE -> p.textSecondary
+                },
+                title = e.title,
+                subtitle = e.subtitle,
+                time = relativeTime(e.timestampMillis),
                 palette = p,
-                onClick = {}
+                onClick = { onOpen(e) }
             )
-            HairlineDivider(p.hairline)
-            LibraryItemRow(
-                icon = Icons.Outlined.Mic,
-                iconTint = Color(0xFFB388FF),
-                title = "Voice note for Neo.wav",
-                subtitle = "Shared to WhatsApp",
-                time = "Wed",
-                palette = p,
-                onClick = {}
-            )
-            HairlineDivider(p.hairline)
-            LibraryItemRow(
-                icon = Icons.Outlined.ChatBubbleOutline,
-                iconTint = MochiTokens.accentMarco,
-                title = "Meal plan for the week",
-                subtitle = "Chat with Chef Marco",
-                time = "Mon",
-                palette = p,
-                onClick = {}
-            )
-            HairlineDivider(p.hairline)
-            LibraryItemRow(
-                icon = Icons.Outlined.MusicNote,
-                iconTint = MochiTokens.accentKaito,
-                title = "Team meeting.m4a",
-                subtitle = "File · audio taken from a video",
-                time = "Mon",
-                palette = p,
-                onClick = {}
-            )
+            if (i < items.lastIndex) HairlineDivider(p.hairline)
         }
+    }
+}
 
-        Spacer(modifier = Modifier.height(MochiSpacing.sectionGap))
+@Composable
+private fun EmptyLibraryCard(p: SuitePalette, onOpenTools: () -> Unit) {
+    Column(
+        Modifier.fillMaxWidth().clip(MochiShapes.card).background(p.card).border(1.dp, p.hairline, MochiShapes.card).padding(MochiSpacing.cardPadding),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text("Nothing here yet", style = MochiType.Body.copy(fontWeight = FontWeight.SemiBold), color = p.textPrimary)
+        Text("Cook with Fridge Chef, finish a quest or convert a file — it will be saved here.", style = MochiType.Label, color = p.textSecondary)
+        Text("Open Tools", style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold), color = p.gold, modifier = Modifier.clickable(onClick = onOpenTools).padding(top = 4.dp))
+    }
+}
+
+@Composable
+private fun KindChip(label: String, count: Int, selected: Boolean, p: SuitePalette, onClick: () -> Unit) {
+    Box(
+        Modifier.clip(MochiShapes.pill)
+            .background(if (selected) p.goldPillBg else p.card)
+            .border(1.dp, if (selected) p.gold.copy(alpha = 0.5f) else p.hairline, MochiShapes.pill)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+    ) {
+        Text(if (count > 0) "$label · $count" else label, style = MochiType.Label, color = if (selected) p.gold else p.textPrimary)
+    }
+}
+
+@Composable
+private fun RoundIconButton(icon: ImageVector, label: String, p: SuitePalette, onClick: () -> Unit) {
+    Box(
+        Modifier.size(44.dp).clip(MochiShapes.pill).background(p.card).border(1.dp, p.hairline, MochiShapes.pill).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) { Icon(icon, contentDescription = label, tint = p.textPrimary, modifier = Modifier.size(20.dp)) }
+}
+
+private fun relativeTime(millis: Long): String {
+    val diff = System.currentTimeMillis() - millis
+    val min = diff / 60_000
+    return when {
+        min < 1 -> "now"
+        min < 60 -> "${min}m"
+        min < 60 * 24 -> "${min / 60}h"
+        min < 60 * 24 * 7 -> "${min / (60 * 24)}d"
+        else -> java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault()).format(java.util.Date(millis))
     }
 }
 
@@ -513,290 +503,6 @@ private fun LibraryItemRow(
 }
 
 /**
- * Search Screen matching Search.png & Search - light.png.
- */
-@Composable
-fun SearchScreen(
-    onBack: () -> Unit,
-    onOpenFridgeChef: () -> Unit,
-    onOpenTools: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val p = rememberSuiteColors()
-    val accent = LocalCharacterAccent.current
-    var query by remember { mutableStateOf("pasta") }
-
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .statusBarsPadding()
-            .navigationBarsPadding()
-            .padding(horizontal = MochiSpacing.screenPadding, vertical = MochiSpacing.sm)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(MochiSpacing.md)
-    ) {
-        // Search Input Bar with gold border + Cancel button
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(MochiSpacing.sm)
-        ) {
-            Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(52.dp)
-                    .clip(MochiShapes.pill)
-                    .background(p.card)
-                    .border(1.2.dp, p.gold, MochiShapes.pill)
-                    .padding(start = 16.dp, end = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Search,
-                        contentDescription = null,
-                        tint = p.textSecondary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    BasicTextField(
-                        value = query,
-                        onValueChange = { query = it },
-                        textStyle = MochiType.Body.copy(color = p.textPrimary),
-                        cursorBrush = SolidColor(p.gold),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-                if (query.isNotEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .size(34.dp)
-                            .clip(CircleShape)
-                            .background(p.hairline)
-                            .clickable { query = "" },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Close,
-                            contentDescription = "Clear search",
-                            tint = p.textPrimary,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                }
-            }
-
-            Text(
-                text = "Cancel",
-                style = MochiType.Body.copy(fontWeight = FontWeight.Medium),
-                color = p.gold,
-                modifier = Modifier.clickable { onBack() }
-            )
-        }
-
-        // Category pills with counts ("All · 4", "Recipes · 2", "Chats · 1", "Files · 1")
-        Row(
-            modifier = Modifier.horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(MochiSpacing.xs)
-        ) {
-            listOf("All · 4", "Recipes · 2", "Chats · 1", "Files · 1").forEachIndexed { idx, label ->
-                Box(
-                    modifier = Modifier
-                        .height(38.dp)
-                        .clip(MochiShapes.pill)
-                        .background(if (idx == 0) p.goldPillBg else p.card)
-                        .border(1.dp, if (idx == 0) p.gold else p.hairline, MochiShapes.pill)
-                        .padding(horizontal = 16.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = label,
-                        style = MochiType.Label.copy(fontWeight = FontWeight.Medium),
-                        color = if (idx == 0) p.gold else p.textPrimary
-                    )
-                }
-            }
-        }
-
-        // Ask Elena about "pasta" card
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(MochiShapes.card)
-                .background(accent.copy(alpha = 0.12f))
-                .border(1.dp, accent.copy(alpha = 0.35f), MochiShapes.card)
-                .clickable { onBack() }
-                .padding(MochiSpacing.md),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(MochiSpacing.sm)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(accent),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "E",
-                        style = MochiType.Body.copy(fontWeight = FontWeight.Bold),
-                        color = MochiTokens.onAccent
-                    )
-                }
-                Column {
-                    Text(
-                        text = "Ask Elena about \"${query.ifBlank { "pasta" }}\"",
-                        style = MochiType.Body.copy(fontWeight = FontWeight.SemiBold),
-                        color = p.textPrimary
-                    )
-                    Text(
-                        text = "Get an answer instead of a list",
-                        style = MochiType.Label,
-                        color = p.textSecondary
-                    )
-                }
-            }
-            Icon(
-                imageVector = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
-                contentDescription = null,
-                tint = p.textSecondary
-            )
-        }
-
-        // Highlighted search results matching Search.png
-        SearchResultHighlightedRow(
-            icon = Icons.Outlined.RestaurantMenu,
-            iconTint = MochiTokens.accentMarco,
-            prefix = "Lemon spinach ",
-            highlight = "pasta",
-            suffix = "",
-            subtitle = "Recipe · from your fridge photo · today",
-            palette = p,
-            onClick = onOpenFridgeChef
-        )
-
-        SearchResultHighlightedRow(
-            icon = Icons.Outlined.RestaurantMenu,
-            iconTint = MochiTokens.accentMarco,
-            prefix = "Garlic ",
-            highlight = "pasta",
-            suffix = " bake",
-            subtitle = "Recipe · from Chef Marco · Sep 28",
-            palette = p,
-            onClick = onOpenFridgeChef
-        )
-
-        SearchResultHighlightedRow(
-            icon = Icons.Outlined.ChatBubbleOutline,
-            iconTint = MochiTokens.accentElena,
-            prefix = "Meal plan for the week",
-            highlight = "",
-            suffix = "",
-            quotePrefix = "\"...a quick ",
-            quoteHighlight = "pasta",
-            quoteSuffix = " on Tuesday and soup on Thursday...\"",
-            subtitle = "Chat with Chef Marco · Mon",
-            palette = p,
-            onClick = {}
-        )
-
-        SearchResultHighlightedRow(
-            icon = Icons.Outlined.Description,
-            iconTint = MochiTokens.accentKaito,
-            prefix = "Shopping list.pdf",
-            highlight = "",
-            suffix = "",
-            quotePrefix = "\"...",
-            quoteHighlight = "pasta",
-            quoteSuffix = ", lemons, feta, spinach...\"",
-            subtitle = "File · Oct 20",
-            palette = p,
-            onClick = onOpenTools
-        )
-    }
-}
-
-@Composable
-private fun SearchResultHighlightedRow(
-    icon: ImageVector,
-    iconTint: Color,
-    prefix: String,
-    highlight: String,
-    suffix: String,
-    subtitle: String,
-    palette: SuitePalette,
-    quotePrefix: String? = null,
-    quoteHighlight: String? = null,
-    quoteSuffix: String? = null,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() }
-            .padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(MochiSpacing.sm)
-    ) {
-        Box(
-            modifier = Modifier
-                .size(44.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(iconTint.copy(alpha = 0.15f)),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = iconTint,
-                modifier = Modifier.size(20.dp)
-            )
-        }
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                text = buildAnnotatedString {
-                    append(prefix)
-                    if (highlight.isNotEmpty()) {
-                        withStyle(SpanStyle(color = palette.gold, fontWeight = FontWeight.SemiBold)) {
-                            append(highlight)
-                        }
-                    }
-                    append(suffix)
-                },
-                style = MochiType.Body.copy(fontWeight = FontWeight.SemiBold),
-                color = palette.textPrimary
-            )
-            if (quotePrefix != null && quoteHighlight != null && quoteSuffix != null) {
-                Text(
-                    text = buildAnnotatedString {
-                        append(quotePrefix)
-                        withStyle(SpanStyle(color = palette.gold, fontWeight = FontWeight.SemiBold)) {
-                            append(quoteHighlight)
-                        }
-                        append(quoteSuffix)
-                    },
-                    style = MochiType.Body,
-                    color = palette.textSecondary
-                )
-            }
-            Text(
-                text = subtitle,
-                style = MochiType.Label,
-                color = palette.textSecondary
-            )
-        }
-    }
-}
-
-/**
  * Profile and Settings Screen matching Profile and settings.png & Profile and settings - light.png.
  */
 @Composable
@@ -812,9 +518,9 @@ fun ProfileAndSettingsScreen(
     onOpenPermissions: () -> Unit,
     onOpenPrivacyData: () -> Unit,
     onOpenHelpFeedback: () -> Unit,
-    onOpenComponentGallery: () -> Unit,
     onBack: () -> Unit,
     settings: MochiPersistentSettings = MochiPersistentSettings(),
+    profile: UserProfile = UserProfile(),
     onSignOut: () -> Unit = {},
     onUpdateSettings: ((MochiPersistentSettings) -> MochiPersistentSettings) -> Unit = {},
     modifier: Modifier = Modifier
@@ -942,7 +648,7 @@ fun ProfileAndSettingsScreen(
                         color = p.gold
                     )
                     Text(
-                        text = "%,d".format(settings.aiEnergyBalance),
+                        text = if (profile.isProSubscriber) "∞" else "${profile.aiCreditsRemaining}/${profile.aiCreditsMax}",
                         style = MochiType.Title,
                         color = p.textPrimary
                     )
@@ -1245,7 +951,7 @@ fun EditProfileScreen(
                     onClick = {
                         onUpdateSettings {
                             it.copy(
-                                userName = fullName.ifBlank { "Your name" },
+                                userName = fullName.trim(),
                                 userNickname = nickname,
                                 userAboutBio = aboutYou
                             )
@@ -1321,7 +1027,7 @@ fun EditProfileScreen(
                         value = fullName,
                         onValueChange = {
                             fullName = it
-                            onUpdateSettings { s -> s.copy(userName = it.ifBlank { "Your name" }) }
+                            onUpdateSettings { s -> s.copy(userName = it.trim()) }
                         },
                         textStyle = MochiType.Body.copy(color = p.textPrimary),
                         cursorBrush = SolidColor(accent),
@@ -1455,7 +1161,7 @@ fun EditProfileScreen(
                 .clickable {
                     onUpdateSettings {
                         it.copy(
-                            userName = fullName.ifBlank { "Your name" },
+                            userName = fullName.trim(),
                             userNickname = nickname,
                             userAboutBio = aboutYou
                         )
@@ -1479,14 +1185,13 @@ fun EditProfileScreen(
 @Composable
 fun WalletScreen(
     onBack: () -> Unit,
-    settings: MochiPersistentSettings = MochiPersistentSettings(),
-    onUpdateSettings: ((MochiPersistentSettings) -> MochiPersistentSettings) -> Unit = {},
+    profile: UserProfile = UserProfile(),
     modifier: Modifier = Modifier
 ) {
     val p = rememberSuiteColors()
     val accent = LocalCharacterAccent.current
-    val balance = settings.aiEnergyBalance
-    val checkedInToday = settings.checkedInToday
+    var notice by remember { mutableStateOf<String?>(null) }
+    val loaded = profile.userId.isNotBlank()
 
     Column(
         modifier = modifier
@@ -1497,281 +1202,96 @@ fun WalletScreen(
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(MochiSpacing.md)
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(MochiSpacing.md)
-        ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(MochiSpacing.md)) {
             BackPillButton(palette = p, onClick = onBack)
-            Text(
-                text = "Wallet",
-                style = MochiType.Title,
-                color = p.textPrimary
-            )
+            Text(text = "Wallet", style = MochiType.Title, color = p.textPrimary)
         }
 
-        // Balance Card matching Wallet.png
+        // AI energy — read from your account, refilled by the server.
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(MochiShapes.card)
-                .background(
-                    Brush.linearGradient(
-                        colors = listOf(p.card, p.goldPillBg)
-                    )
-                )
+                .background(Brush.linearGradient(colors = listOf(p.card, p.goldPillBg)))
                 .border(1.dp, p.gold.copy(alpha = 0.4f), MochiShapes.card)
                 .padding(MochiSpacing.cardPadding),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
+            Text("⚡ AI energy today", style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold), color = p.gold)
             Text(
-                text = "⚡ AI energy",
-                style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold),
-                color = p.gold
-            )
-            Text(
-                text = "%,d".format(balance),
+                text = when {
+                    !loaded -> "—"
+                    profile.isProSubscriber -> "Unlimited"
+                    else -> "${profile.aiCreditsRemaining} of ${profile.aiCreditsMax}"
+                },
                 style = MochiType.Display,
                 color = p.textPrimary
             )
+            if (loaded && !profile.isProSubscriber) {
+                LinearProgressIndicator(
+                    progress = { profile.aiCreditsRemaining.toFloat() / profile.aiCreditsMax.coerceAtLeast(1) },
+                    modifier = Modifier.fillMaxWidth().height(6.dp).clip(MochiShapes.pill),
+                    color = accent,
+                    trackColor = p.hairline
+                )
+            }
             Text(
-                text = "Used for voice chats, photos and file conversions. Refills to 2,000 on Nov 30.",
+                text = if (!loaded) "Sign in to see your allowance." else "One chat or photo uses one. Your allowance refills every day.",
                 style = MochiType.Label,
                 color = p.textSecondary
             )
         }
 
-        // MochiLife Pro Card with 3 feature pills & Manage button
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(MochiShapes.card)
-                .background(p.card)
-                .border(1.dp, p.hairline, MochiShapes.card)
-                .padding(MochiSpacing.md),
-            verticalArrangement = Arrangement.spacedBy(MochiSpacing.sm)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(
-                        text = "MochiLife Pro",
-                        style = MochiType.Body.copy(fontWeight = FontWeight.SemiBold),
-                        color = p.textPrimary
-                    )
-                    Text(
-                        text = "Monthly plan · renews Nov 30",
-                        style = MochiType.Label,
-                        color = p.textSecondary
-                    )
-                }
-                Box(
-                    modifier = Modifier
-                        .clip(MochiShapes.pill)
-                        .background(p.bg)
-                        .border(1.dp, p.hairline, MochiShapes.pill)
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                ) {
-                    Text(
-                        text = "Manage",
-                        style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold),
-                        color = p.textPrimary
-                    )
-                }
-            }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ProFeaturePill("Every companion", p)
-                ProFeaturePill("Longer voice chats", p)
-            }
-            ProFeaturePill("2,000 energy a month", p)
-        }
-
-        Text(
-            text = "Top up energy",
-            style = MochiType.Body.copy(fontWeight = FontWeight.SemiBold),
-            color = p.textPrimary
-        )
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(MochiSpacing.xs)
-        ) {
-            listOf(
-                Triple("500", "See price", false),
-                Triple("1,500", "See price", true),
-                Triple("5,000", "See price", false)
-            ).forEach { (amount, price, popular) ->
-                Box(modifier = Modifier.weight(1f)) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(MochiShapes.card)
-                            .background(if (popular) p.goldPillBg.copy(alpha = 0.65f) else p.card)
-                            .border(
-                                1.dp,
-                                if (popular) p.gold else p.hairline,
-                                MochiShapes.card
-                            )
-                            .clickable {
-                                val delta = amount.replace(",", "").toInt()
-                                onUpdateSettings { it.copy(aiEnergyBalance = it.aiEnergyBalance + delta) }
-                            }
-                            .padding(vertical = 18.dp, horizontal = 8.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Text(
-                            text = amount,
-                            style = MochiType.Title,
-                            color = p.textPrimary
-                        )
-                        Text(
-                            text = "energy",
-                            style = MochiType.Label,
-                            color = p.textSecondary
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = price,
-                            style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold),
-                            color = p.gold
-                        )
-                    }
-                    if (popular) {
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.TopCenter)
-                                .offset(y = (-10).dp)
-                                .clip(MochiShapes.pill)
-                                .background(p.gold)
-                                .padding(horizontal = 10.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = "POPULAR",
-                                style = MochiType.Label.copy(fontWeight = FontWeight.Bold),
-                                color = Color(0xFF17181A)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // Daily check-in card with 7 streak bars & Check in button
+        // Plan
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(MochiShapes.card)
                 .background(p.card)
                 .border(1.dp, p.hairline, MochiShapes.card)
-                .padding(MochiSpacing.md),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+                .padding(MochiSpacing.cardPadding),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.weight(1f)
-            ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(if (profile.isProSubscriber) "MochiLife Pro" else "Free plan", style = MochiType.Body.copy(fontWeight = FontWeight.SemiBold), color = p.textPrimary)
                 Text(
-                    text = "Daily check-in",
-                    style = MochiType.Body.copy(fontWeight = FontWeight.SemiBold),
-                    color = p.textPrimary
-                )
-                Text(
-                    text = "${settings.streakDays}-day streak · +10 energy a day",
+                    if (profile.isProSubscriber) "Unlimited voice and chat, every companion." else "Pro: unlimited voice and chat, every companion, custom personalities.",
                     style = MochiType.Label,
                     color = p.textSecondary
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    repeat(7) { idx ->
-                        val active = idx < settings.streakDays
-                        Box(
-                            modifier = Modifier
-                                .width(22.dp)
-                                .height(6.dp)
-                                .clip(MochiShapes.pill)
-                                .background(if (active) p.gold else p.hairline)
-                        )
-                    }
+            }
+            if (!profile.isProSubscriber) {
+                Box(
+                    Modifier.clip(MochiShapes.pill).background(accent)
+                        .clickable { notice = "Pro opens when MochiLife is published on Google Play. Purchases go through Google Play only." }
+                        .padding(horizontal = 16.dp, vertical = 10.dp)
+                ) {
+                    Text("Go Pro", style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold), color = MochiTokens.onAccent)
                 }
             }
-            Box(
-                modifier = Modifier
-                    .clip(MochiShapes.pill)
-                    .background(accent)
-                    .clickable(enabled = !checkedInToday) {
-                        onUpdateSettings {
-                            it.copy(
-                                checkedInToday = true,
-                                streakDays = (it.streakDays + 1).coerceAtMost(7),
-                                aiEnergyBalance = it.aiEnergyBalance + 10
-                            )
-                        }
-                    }
-                    .padding(horizontal = 18.dp, vertical = 10.dp)
-            ) {
-                Text(
-                    text = if (checkedInToday) "Checked in" else "Check in",
-                    style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold),
-                    color = MochiTokens.onAccent
-                )
+        }
+
+        // Progress — real numbers from your account.
+        Row(horizontalArrangement = Arrangement.spacedBy(MochiSpacing.sm), modifier = Modifier.fillMaxWidth()) {
+            listOf(
+                "Gold coins" to "%,d".format(profile.goldCoins),
+                "Level" to profile.level.toString(),
+                "Saved" to "$%,d".format(profile.moneySavedDollars)
+            ).forEach { (label, value) ->
+                Column(
+                    Modifier.weight(1f).clip(MochiShapes.card).background(p.card).border(1.dp, p.hairline, MochiShapes.card).padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(value, style = MochiType.Title, color = p.textPrimary)
+                    Text(label, style = MochiType.Label, color = p.textSecondary)
+                }
             }
         }
 
-        Text(
-            text = "Recent activity",
-            style = MochiType.Body.copy(fontWeight = FontWeight.SemiBold),
-            color = p.textPrimary
-        )
-
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(MochiShapes.card)
-                .background(p.card)
-                .border(1.dp, p.hairline, MochiShapes.card)
-                .padding(MochiSpacing.md),
-            verticalArrangement = Arrangement.spacedBy(MochiSpacing.sm)
-        ) {
-            WalletActivityRow("Fridge Chef photo", "Today, 7:12 PM", "–20", p)
-            HairlineDivider(p.hairline)
-            WalletActivityRow("Voice chat with Elena, 6 min", "Today, 6:40 PM", "–30", p)
+        notice?.let {
+            Text(it, style = MochiType.Label, color = p.textSecondary, modifier = Modifier.fillMaxWidth().clip(MochiShapes.card).background(p.card).padding(MochiSpacing.md))
         }
-    }
-}
-
-@Composable
-private fun ProFeaturePill(text: String, palette: SuitePalette) {
-    Box(
-        modifier = Modifier
-            .clip(MochiShapes.pill)
-            .background(palette.bg)
-            .border(1.dp, palette.hairline, MochiShapes.pill)
-            .padding(horizontal = 12.dp, vertical = 6.dp)
-    ) {
-        Text(text = text, style = MochiType.Label, color = palette.textPrimary)
-    }
-}
-
-@Composable
-private fun WalletActivityRow(title: String, subtitle: String, delta: String, palette: SuitePalette) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column {
-            Text(title, style = MochiType.Body.copy(fontWeight = FontWeight.Medium), color = palette.textPrimary)
-            Text(subtitle, style = MochiType.Label, color = palette.textSecondary)
-        }
-        Text(
-            text = delta,
-            style = MochiType.Body.copy(fontWeight = FontWeight.SemiBold),
-            color = palette.textPrimary
-        )
+        Spacer(Modifier.height(MochiSpacing.md))
     }
 }
 

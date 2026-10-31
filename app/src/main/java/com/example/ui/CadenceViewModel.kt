@@ -8,6 +8,10 @@ import android.speech.tts.TextToSpeech
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.actions.ActionExecutor
+import com.example.actions.ActionOutcome
+import com.example.actions.Preparation
+import com.example.ai.AiUnavailableException
 import com.example.ai.AttachmentMediaType
 import com.example.ai.CadenceAiService
 import com.example.ai.ConversionOutputResult
@@ -37,6 +41,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -48,6 +53,9 @@ class CadenceViewModel(
 
     private val prefs: SharedPreferences =
         appContext.getSharedPreferences("mochi_persistent_settings", Context.MODE_PRIVATE)
+
+    /** Name, nickname and "about me" are personal: they live encrypted, never in plain prefs. */
+    private val secure = com.example.security.SecureStore(appContext)
 
     val characterController = CharacterController(viewModelScope)
 
@@ -91,7 +99,15 @@ class CadenceViewModel(
     private val _settings = MutableStateFlow(loadSettingsFromDisk())
     val settings: StateFlow<MochiPersistentSettings> = _settings.asStateFlow()
 
+    private fun migratePersonalFieldsToSecureStore() {
+        val keys = listOf("userName", "userNickname", "userAboutBio")
+        if (keys.none { prefs.contains(it) }) return
+        keys.forEach { k -> prefs.getString(k, null)?.let { secure.putString(k, it) } }
+        prefs.edit().apply { keys.forEach { remove(it) } }.apply()
+    }
+
     private fun loadSettingsFromDisk(): MochiPersistentSettings {
+        migratePersonalFieldsToSecureStore()
         // v2: the always-on wake word used to default to ON and caused the mic to open and close
         // in a loop. Reset it to OFF once; the user can turn it back on in Settings.
         if (prefs.getInt("settingsSchema", 1) < 2) {
@@ -106,12 +122,9 @@ class CadenceViewModel(
             "Notifications"
         )
         return MochiPersistentSettings(
-            userName = prefs.getString("userName", "Your name") ?: "Your name",
-            userNickname = prefs.getString("userNickname", "") ?: "",
-            userAboutBio = prefs.getString(
-                "userAboutBio",
-                "Vegetarian on weekdays, enjoys quick 15-minute dinners and calm evening focus."
-            ) ?: "",
+            userName = secure.getString("userName"),
+            userNickname = secure.getString("userNickname"),
+            userAboutBio = secure.getString("userAboutBio"),
             preferredLanguage = prefs.getString("preferredLanguage", "English") ?: "English",
             floatingCompanionEnabled = prefs.getBoolean("floatingCompanionEnabled", true),
             wakeWordEnabled = prefs.getBoolean("wakeWordEnabled", false),
@@ -125,9 +138,6 @@ class CadenceViewModel(
             shareAnonymousUsage = prefs.getBoolean("shareAnonymousUsage", false),
             isDarkTheme = prefs.getBoolean("isDarkTheme", true),
             themeMode = prefs.getInt("themeMode", if (prefs.getBoolean("isDarkTheme", true)) 0 else 1),
-            aiEnergyBalance = prefs.getInt("aiEnergyBalance", 1240),
-            checkedInToday = prefs.getBoolean("checkedInToday", false),
-            streakDays = prefs.getInt("streakDays", 4),
             allowedPermissions = prefs.getStringSet("allowedPermissions", defaultPerms)?.toSet() ?: defaultPerms
         )
     }
@@ -135,11 +145,11 @@ class CadenceViewModel(
     fun updateSettings(transform: (MochiPersistentSettings) -> MochiPersistentSettings) {
         val updated = transform(_settings.value)
         _settings.value = updated
+        secure.putString("userName", updated.userName.take(100))
+        secure.putString("userNickname", updated.userNickname.take(60))
+        secure.putString("userAboutBio", updated.userAboutBio.take(1_000))
         voiceCommandService.setWakeWordEnabled(updated.wakeWordEnabled)
         prefs.edit()
-            .putString("userName", updated.userName)
-            .putString("userNickname", updated.userNickname)
-            .putString("userAboutBio", updated.userAboutBio)
             .putString("preferredLanguage", updated.preferredLanguage)
             .putBoolean("floatingCompanionEnabled", updated.floatingCompanionEnabled)
             .putBoolean("wakeWordEnabled", updated.wakeWordEnabled)
@@ -153,9 +163,6 @@ class CadenceViewModel(
             .putBoolean("shareAnonymousUsage", updated.shareAnonymousUsage)
             .putBoolean("isDarkTheme", updated.isDarkTheme)
             .putInt("themeMode", updated.themeMode)
-            .putInt("aiEnergyBalance", updated.aiEnergyBalance)
-            .putBoolean("checkedInToday", updated.checkedInToday)
-            .putInt("streakDays", updated.streakDays)
             .putStringSet("allowedPermissions", updated.allowedPermissions)
             .apply()
     }
@@ -171,71 +178,27 @@ class CadenceViewModel(
     }
 
     // --- Quests State (for #/quests view and Stage quests integration) ---
-    private val _quests = MutableStateFlow(
-        listOf(
-            QuestItem(
-                id = "quest_1",
-                title = "Cook a 15-minute Fridge Chef dinner instead of delivery",
-                category = QuestCategory.MEAL.name,
-                xpReward = 120,
-                coinsReward = 35,
-                isCompleted = false
-            ),
-            QuestItem(
-                id = "quest_2",
-                title = "Send a voice check-in to Neo or Mom on WhatsApp",
-                category = QuestCategory.DAY.name,
-                xpReward = 80,
-                coinsReward = 25,
-                isCompleted = false
-            ),
-            QuestItem(
-                id = "quest_3",
-                title = "Take 3 slow breaths with Nurse Elena's calm pacing",
-                category = QuestCategory.MIND.name,
-                xpReward = 60,
-                coinsReward = 20,
-                isCompleted = true
-            ),
-            QuestItem(
-                id = "quest_4",
-                title = "Split a group dinner receipt in under 10 seconds",
-                category = QuestCategory.WALLET.name,
-                xpReward = 90,
-                coinsReward = 30,
-                isCompleted = false
-            )
-        )
-    )
+    private val _quests = MutableStateFlow<List<QuestItem>>(emptyList())
     val quests: StateFlow<List<QuestItem>> = _quests.asStateFlow()
 
     fun toggleQuestCompleted(questId: String) {
-        _quests.value = _quests.value.map { q ->
-            if (q.id == questId) {
-                val nowComplete = !q.isCompleted
-                if (nowComplete) {
-                    updateSettings { s -> s.copy(aiEnergyBalance = s.aiEnergyBalance + q.coinsReward) }
-                    characterController.react("happy")
-                }
-                q.copy(isCompleted = nowComplete)
-            } else {
-                q
-            }
+        val uid = _currentUserId.value ?: return
+        val quest = _quests.value.firstOrNull { it.id == questId } ?: return
+        viewModelScope.launch {
+            runCatching { repository.toggleQuestCompletion(uid, quest, _userProfile.value) }
+                .onSuccess { if (!quest.isCompleted) characterController.react("happy") }
+                .onFailure { android.util.Log.w("CadenceViewModel", "Quest update failed: ${it.javaClass.simpleName}") }
         }
     }
 
     fun addQuest(title: String, category: QuestCategory = QuestCategory.DAY) {
-        val clean = title.trim()
+        val uid = _currentUserId.value ?: return
+        val clean = title.trim().take(200)
         if (clean.isEmpty()) return
-        val item = QuestItem(
-            id = "quest_${UUID.randomUUID().toString().take(8)}",
-            title = clean,
-            category = category.name,
-            xpReward = 75,
-            coinsReward = 25,
-            isCompleted = false
-        )
-        _quests.value = listOf(item) + _quests.value
+        viewModelScope.launch {
+            runCatching { repository.createQuest(userId = uid, title = clean, category = category) }
+                .onFailure { android.util.Log.w("CadenceViewModel", "Quest create failed: ${it.javaClass.simpleName}") }
+        }
     }
 
     private val _currentUserId = MutableStateFlow<String?>(null)
@@ -244,40 +207,7 @@ class CadenceViewModel(
     private val _userProfile = MutableStateFlow(UserProfile())
     val userProfile: StateFlow<UserProfile> = _userProfile.asStateFlow()
 
-    private val _meals = MutableStateFlow<List<MealCreation>>(
-        listOf(
-            MealCreation(
-                id = "meal_default_1",
-                title = "Lemon spinach pasta",
-                ingredientsUsed = "Eggs, Spinach, Feta, Lemon, Pasta, Garlic",
-                prepTimeMinutes = 12,
-                calories = 460,
-                moneySavedDollars = 24,
-                stepsSummary = "1. Boil pasta in salted water for 8 minutes until al dente.\n2. Sear minced garlic and fresh spinach in olive oil for 2 minutes.\n3. Toss pasta with lemon juice, crumbled feta, and pasta water.",
-                isCooked = false
-            ),
-            MealCreation(
-                id = "meal_default_2",
-                title = "Spinach and feta omelette",
-                ingredientsUsed = "Eggs, Spinach, Feta",
-                prepTimeMinutes = 8,
-                calories = 340,
-                moneySavedDollars = 18,
-                stepsSummary = "1. Whisk 3 eggs with a pinch of salt and black pepper.\n2. Wilt spinach in a warm skillet for 1 minute, then pour in eggs.\n3. Fold in crumbled feta and plate warm.",
-                isCooked = false
-            ),
-            MealCreation(
-                id = "meal_default_3",
-                title = "Feta and lemon egg skillet",
-                ingredientsUsed = "Eggs, Feta, Lemon, Garlic",
-                prepTimeMinutes = 10,
-                calories = 390,
-                moneySavedDollars = 20,
-                stepsSummary = "1. Sizzle garlic in olive oil over medium heat.\n2. Crack eggs into the skillet and scatter feta around the edges.\n3. Finish with fresh lemon zest and black pepper.",
-                isCooked = false
-            )
-        )
-    )
+    private val _meals = MutableStateFlow<List<MealCreation>>(emptyList())
     val meals: StateFlow<List<MealCreation>> = _meals.asStateFlow()
 
     // 3 Launch Characters from CHARACTERS.md
@@ -300,13 +230,13 @@ class CadenceViewModel(
     val isFloatingCompanionMode: StateFlow<Boolean> = _isFloatingCompanionMode.asStateFlow()
 
     // Live Mood & Stress Analyzer State
-    private val _currentStressPercent = MutableStateFlow(14)
+    private val _currentStressPercent = MutableStateFlow(0)
     val currentStressPercent: StateFlow<Int> = _currentStressPercent.asStateFlow()
 
-    private val _currentMoodTone = MutableStateFlow("Calm & Balanced")
+    private val _currentMoodTone = MutableStateFlow("")
     val currentMoodTone: StateFlow<String> = _currentMoodTone.asStateFlow()
 
-    private val _currentBehavioralInsight = MutableStateFlow("Ready for hands-free voice or text tasks.")
+    private val _currentBehavioralInsight = MutableStateFlow("")
     val currentBehavioralInsight: StateFlow<String> = _currentBehavioralInsight.asStateFlow()
 
     // Tools & Converter State
@@ -319,26 +249,7 @@ class CadenceViewModel(
     private val _conversionResult = MutableStateFlow<ConversionOutputResult?>(null)
     val conversionResult: StateFlow<ConversionOutputResult?> = _conversionResult.asStateFlow()
 
-    private val _chatHistory = MutableStateFlow(
-        listOf(
-            CompanionChatTurn(
-                id = "welcome_1",
-                senderIsUser = false,
-                message = "Hi! I'm Nurse Elena. Ask me by voice or text to call someone on WhatsApp, read your WhatsApp voice messages, check social media or news, open YouTube, or search the web.",
-                moodTag = "Voice & Bridge Ready",
-                detectedLanguage = "English",
-                detectedTone = "Warm & Attentive",
-                actionType = CompanionActionType.NONE,
-                actionRecipient = "",
-                actionPayload = "",
-                angerOrStressPercent = 14,
-                spokenConfirmation = "Hi, I'm Nurse Elena. How can I help you today?",
-                suggestedQuestTitle = "Take three slow breaths",
-                suggestedQuestCategory = QuestCategory.MIND,
-                xpBonus = 40
-            )
-        )
-    )
+    private val _chatHistory = MutableStateFlow<List<CompanionChatTurn>>(emptyList())
     val chatHistory: StateFlow<List<CompanionChatTurn>> = _chatHistory.asStateFlow()
 
     private val _isCompanionThinking = MutableStateFlow(false)
@@ -383,17 +294,40 @@ class CadenceViewModel(
             CompanionActionType.NAVIGATE_ROUTE,
             CompanionActionType.WHATS_PLAYING
         )
-        if (leavesApp && _settings.value.floatingCompanionEnabled) {
-            FloatingCompanionService.startIfEnabled(context)
-        }
-        voiceCommandService.executeActionIntent(
+        val outcome = OmnichannelMediaBridge.autoExecuteCompanionAction(
             context = context,
             tts = tts,
             turn = turn,
-            companion = _selectedCharacter.value,
-            onNavigateRoute = { route -> navigateHash(route) }
+            character = _selectedCharacter.value,
+            onNavigateHashRoute = { route -> navigateHash(route) }
         )
+        if (leavesApp && outcome is ActionOutcome.Done && _settings.value.floatingCompanionEnabled) {
+            FloatingCompanionService.startIfEnabled(context)
+        }
+        reportOutcome(context, tts, outcome)
     }
+
+    /** Adds the real result of an action to the chat and says it, unless there is nothing to say. */
+    private fun reportOutcome(context: Context, tts: TextToSpeech?, outcome: ActionOutcome) {
+        if (outcome is ActionOutcome.NeedsPermission) {
+            _permissionRequests.tryEmit(outcome.permission)
+        }
+        if (outcome.spoken.isBlank()) return
+        _chatHistory.value = _chatHistory.value + CompanionChatTurn(
+            id = UUID.randomUUID().toString(),
+            senderIsUser = false,
+            message = outcome.spoken,
+            spokenConfirmation = outcome.spoken,
+            isActionReport = true
+        )
+        if (outcome !is ActionOutcome.Done) {
+            characterController.speakWithLipSync(context, tts, outcome.spoken, _selectedCharacter.value)
+        }
+    }
+
+    /** Runtime permissions the UI should ask for (e.g. contacts when the user says "call Mom"). */
+    private val _permissionRequests = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val permissionRequests: kotlinx.coroutines.flow.SharedFlow<String> = _permissionRequests
 
     // Fridge Chef State
     val pantryIngredientChips: List<FridgeIngredientChip> = listOf(
@@ -407,9 +341,7 @@ class CadenceViewModel(
         FridgeIngredientChip("Chicken", "", "Protein")
     )
 
-    private val _selectedIngredients = MutableStateFlow(
-        setOf("Eggs", "Spinach", "Feta", "Lemon", "Pasta", "Garlic")
-    )
+    private val _selectedIngredients = MutableStateFlow<Set<String>>(emptySet())
     val selectedIngredients: StateFlow<Set<String>> = _selectedIngredients.asStateFlow()
 
     private val _fridgePhotoBitmap = MutableStateFlow<Bitmap?>(null)
@@ -418,16 +350,14 @@ class CadenceViewModel(
     private val _customCraving = MutableStateFlow("")
     val customCraving: StateFlow<String> = _customCraving.asStateFlow()
 
-    private val _chefNote = MutableStateFlow("The pasta is quickest. Want me to read the steps out loud?")
+    private val _chefNote = MutableStateFlow("")
     val chefNote: StateFlow<String> = _chefNote.asStateFlow()
 
     private val _isChefCooking = MutableStateFlow(false)
     val isChefCooking: StateFlow<Boolean> = _isChefCooking.asStateFlow()
 
     // Group Receipt & Expense Splitter State
-    private val _receiptOrdersInput = MutableStateFlow(
-        "Neo: Grilled Ribeye Steak $28.00\nElena: Matcha Latte & Salad $16.50\nKaito: Crispy Chicken Bowl $18.00\nMarco: Truffle Pasta $22.00"
-    )
+    private val _receiptOrdersInput = MutableStateFlow("")
     val receiptOrdersInput: StateFlow<String> = _receiptOrdersInput.asStateFlow()
 
     private val _receiptTaxTipPercent = MutableStateFlow(18.0)
@@ -439,10 +369,36 @@ class CadenceViewModel(
     private val _receiptSplitResult = MutableStateFlow<ReceiptSplitResult?>(null)
     val receiptSplitResult: StateFlow<ReceiptSplitResult?> = _receiptSplitResult.asStateFlow()
 
+    private val _receiptError = MutableStateFlow<String?>(null)
+    val receiptError: StateFlow<String?> = _receiptError.asStateFlow()
+
     private val _isSplittingReceipt = MutableStateFlow(false)
     val isSplittingReceipt: StateFlow<Boolean> = _isSplittingReceipt.asStateFlow()
 
+    // --- Library: everything the user really made (recipes, quests, converted files) ---
+    private val _libraryFiles = MutableStateFlow<List<java.io.File>>(emptyList())
+
+    fun refreshLibraryFiles() {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            _libraryFiles.value = com.example.data.LibraryStore.files(appContext)
+        }
+    }
+
+    val libraryEntries: StateFlow<List<com.example.data.LibraryEntry>> =
+        kotlinx.coroutines.flow.combine(_meals, _quests, _libraryFiles) { meals, quests, files ->
+            (meals.map { com.example.data.LibraryEntry("meal_${it.id}", com.example.data.LibraryEntry.Kind.RECIPE, it.title, "Recipe · ${it.prepTimeMinutes} min", it.createdAtMillis) } +
+                quests.map { com.example.data.LibraryEntry("quest_${it.id}", com.example.data.LibraryEntry.Kind.QUEST, it.title, if (it.isCompleted) "Quest · done" else "Quest", it.createdAtMillis) } +
+                files.map { com.example.data.LibraryEntry("file_${it.name}", com.example.data.LibraryEntry.Kind.FILE, it.name, "File · ${(it.length() / 1024).coerceAtLeast(1)} KB", it.lastModified(), it) })
+                .sortedByDescending { it.timestampMillis }
+        }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, emptyList())
+
+    init {
+        refreshLibraryFiles()
+        viewModelScope.launch { _conversionResult.collect { if (it != null) refreshLibraryFiles() } }
+    }
+
     private var profileJob: Job? = null
+    private var questsJob: Job? = null
     private var mealsJob: Job? = null
 
     /** Applies Dark / Light / Auto. For Auto, [systemDark] is the phone's current mode. */
@@ -499,28 +455,30 @@ class CadenceViewModel(
         }
     }
 
+    /** Sign-out on this device: wipe personal data stored locally. */
+    fun clearLocalPersonalData() {
+        secure.clear()
+        _chatHistory.value = emptyList()
+        _settings.value = _settings.value.copy(userName = "", userNickname = "", userAboutBio = "")
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            com.example.data.LibraryStore.files(appContext).forEach { com.example.data.LibraryStore.delete(appContext, it) }
+            java.io.File(appContext.cacheDir, "shared").deleteRecursively()
+            refreshLibraryFiles()
+        }
+    }
+
     fun clearChatHistory() {
-        _chatHistory.value = _chatHistory.value.take(1)
+        _chatHistory.value = emptyList()
     }
 
     fun triggerCalmDeEscalation(context: Context, tts: TextToSpeech?) {
         val activeChar = _selectedCharacter.value
-        _currentStressPercent.value = 12
-        _currentMoodTone.value = "Cooling De-Escalation Active"
-        _currentBehavioralInsight.value = "Heart rate & tension pacing slowed — guided calm reset active."
-        val calmMsg = "Take a slow, deep breath with me. Inhale gently for four seconds, hold, and let your shoulders drop. I am taking care of your messages and tasks right now."
+        val calmMsg = "Let's slow down together. Breathe in for four… hold… and out for six. Let your shoulders drop."
         val calmTurn = CompanionChatTurn(
             id = UUID.randomUUID().toString(),
             senderIsUser = false,
             message = calmMsg,
-            moodTag = "Cooling Reset",
-            detectedLanguage = "English",
-            detectedTone = "Calm & Restorative",
-            angerOrStressPercent = 12,
-            behavioralInsight = "Active stress de-escalation triggered.",
-            verificationReport = "Verified: Audio stream & breathing cadence synchronized.",
-            spokenConfirmation = calmMsg,
-            actionType = CompanionActionType.SPEAK_LOUD
+            spokenConfirmation = calmMsg
         )
         _chatHistory.value = _chatHistory.value + calmTurn
         characterController.react("calm")
@@ -534,37 +492,17 @@ class CadenceViewModel(
         targetPlatform: String,
         mediaType: AttachmentMediaType
     ) {
-        val activeChar = _selectedCharacter.value
-        val recipient = turn.actionRecipient.ifBlank { "Friend" }
-        val payload = turn.actionPayload.ifBlank { turn.message }
         viewModelScope.launch {
-            characterController.speakWithLipSync(
-                context = context,
-                tts = tts,
-                text = "Sending ${mediaType.label} to $recipient on $targetPlatform.",
-                character = activeChar
-            )
-            OmnichannelMediaBridge.sendAttachmentToPlatform(
+            val outcome = OmnichannelMediaBridge.sendAttachmentToPlatform(
                 context = context,
                 tts = tts,
                 targetPlatform = targetPlatform,
-                recipient = recipient,
-                messageText = payload,
+                recipient = turn.actionRecipient,
+                messageText = turn.actionPayload.ifBlank { turn.message },
                 mediaType = mediaType
             )
+            reportOutcome(context, tts, outcome)
         }
-    }
-
-    fun dialPhoneCall(context: Context, tts: TextToSpeech?, phoneOrRecipient: String) {
-        val activeChar = _selectedCharacter.value
-        val target = phoneOrRecipient.ifBlank { "+15550192834" }
-        characterController.speakWithLipSync(
-            context = context,
-            tts = tts,
-            text = "Dialing phone call to $target now.",
-            character = activeChar
-        )
-        OmnichannelMediaBridge.placeSimPhoneCall(context, target)
     }
 
     fun clearConversionResult() {
@@ -693,13 +631,16 @@ class CadenceViewModel(
 
         profileJob?.cancel()
         mealsJob?.cancel()
+        questsJob?.cancel()
 
         if (userId == null) {
             _userProfile.value = UserProfile()
+            _quests.value = emptyList()
+            _meals.value = emptyList()
             return
         }
 
-        if (!displayName.isNullOrBlank() && _settings.value.userName == "Your name") {
+        if (!displayName.isNullOrBlank() && _settings.value.userName.isBlank()) {
             updateSettings { it.copy(userName = displayName) }
         }
 
@@ -725,12 +666,17 @@ class CadenceViewModel(
             }
         }
 
+        questsJob = viewModelScope.launch {
+            try {
+                repository.observeQuests(userId).collectLatest { _quests.value = it }
+            } catch (_: Exception) {
+            }
+        }
+
         mealsJob = viewModelScope.launch {
             try {
                 repository.observeMeals(userId).collectLatest { list ->
-                    if (list.isNotEmpty()) {
-                        _meals.value = list
-                    }
+                    _meals.value = list
                 }
             } catch (_: Exception) {
             }
@@ -738,114 +684,110 @@ class CadenceViewModel(
     }
 
     /**
-     * Processes any voice or text command adaptively and immediately:
-     * - Handles "stop" / "cancel" voice commands to abort any active countdown
-     * - Handles character switching ("switch to Chef Marco", "switch to Kaito")
-     * - Speaks with natural human-like neural voice & 60fps lip-sync
-     * - Triggers immediate navigation or starts the 3-second cancellable countdown
+     * One user message (typed or spoken) → the companion's reply, and an action if one was asked for.
+     * Actions are checked first (real contact, permission) and only then get the 3-second countdown.
      */
     fun sendMessageToMochi(
         context: Context,
         tts: TextToSpeech?,
         userText: String
     ) {
-        val clean = userText.trim()
+        val clean = userText.trim().take(4_000)
         if (clean.isEmpty() || _isCompanionThinking.value) {
             voiceCommandService.clearAwaitingReply()
             return
         }
-        val lower = clean.lowercase()
 
-        // Voice cancel command ("stop", "cancel")
-        if (lower == "stop" || lower == "cancel" || lower == "never mind" || lower == "undo") {
+        if (STOP_WORDS.matches(clean)) {
             cancelPendingVoiceAction()
-            val lastTurn = _chatHistory.value.lastOrNull { !it.senderIsUser }
-            if (lastTurn != null) {
-                markTurnCancelled(lastTurn.id)
-            }
+            _chatHistory.value.lastOrNull { !it.senderIsUser }?.let { markTurnCancelled(it.id) }
             tts?.stop()
             characterController.transitionTo(CharacterRuntimeState.Idle)
             voiceCommandService.clearAwaitingReply()
             return
         }
 
-        // Character switch by voice
-        when {
-            lower.contains("switch to marco") || lower.contains("chef marco") -> chooseCharacter(CharacterSpec.MARCO)
-            lower.contains("switch to kaito") || lower.contains("kaito storm") -> chooseCharacter(CharacterSpec.KAITO)
-            lower.contains("switch to elena") || lower.contains("nurse elena") -> chooseCharacter(CharacterSpec.ELENA)
-        }
-
         val uid = _currentUserId.value
         val activeChar = _selectedCharacter.value
-
-        val userTurn = CompanionChatTurn(
+        val history = _chatHistory.value
+        _chatHistory.value = history + CompanionChatTurn(
             id = UUID.randomUUID().toString(),
             senderIsUser = true,
-            message = clean,
-            moodTag = "You"
+            message = clean
         )
-        _chatHistory.value = _chatHistory.value + userTurn
 
         viewModelScope.launch {
             _isCompanionThinking.value = true
             characterController.transitionTo(CharacterRuntimeState.Thinking)
             try {
-                if (uid != null) {
-                    try {
-                        repository.consumeAiCreditOrThrow(uid, _userProfile.value)
-                    } catch (_: Exception) {
-                    }
+                // Offline/Firestore hiccups must not block chatting; only a real "0 left" does.
+                val hasCredit = uid == null || _userProfile.value.userId != uid ||
+                    runCatching { repository.consumeAiCreditOrThrow(uid, _userProfile.value) }.getOrDefault(true)
+                if (!hasCredit) {
+                    reportOutcome(context, tts, ActionOutcome.Failed("You've used today's AI energy. It refills tomorrow, or you can go Pro in Wallet."))
+                    characterController.transitionTo(CharacterRuntimeState.Idle)
+                    return@launch
                 }
 
-                // Route through VoiceCommandService (combines <10ms instant router + Firebase AI gemini-3.8-flash)
-                val aiTurn = voiceCommandService.processNaturalLanguageCommand(
-                    commandText = clean,
-                    companion = activeChar
-                )
-                _chatHistory.value = _chatHistory.value + aiTurn
+                val aiTurn = try {
+                    voiceCommandService.processNaturalLanguageCommand(
+                        commandText = clean,
+                        companion = activeChar,
+                        userName = _settings.value.userName,
+                        history = history.filterNot { it.isActionReport }
+                    )
+                } catch (e: AiUnavailableException) {
+                    reportOutcome(context, tts, ActionOutcome.Failed(e.message ?: "Something went wrong."))
+                    characterController.transitionTo(CharacterRuntimeState.Idle)
+                    return@launch
+                }
 
-                // Update Live Mood & Stress Analyzer
                 _currentStressPercent.value = aiTurn.angerOrStressPercent
                 _currentMoodTone.value = aiTurn.detectedTone
-                _currentBehavioralInsight.value = aiTurn.behavioralInsight
 
-                // Speak confirmation + reply out loud with human-like neural voice and 60fps lip-sync
-                val spokenText = when {
-                    aiTurn.actionType == CompanionActionType.WHATSAPP_READ_CHAT ->
-                        aiTurn.spokenConfirmation.ifBlank { aiTurn.message }
-                    aiTurn.spokenConfirmation.isNotBlank() &&
-                        aiTurn.actionType != CompanionActionType.NONE &&
-                        !aiTurn.message.startsWith(aiTurn.spokenConfirmation.take(15)) ->
-                        aiTurn.spokenConfirmation
-                    else ->
-                        aiTurn.message
+                // Check the action before announcing it, so she never says "Calling Mom" for a contact that doesn't exist.
+                val preparation = when (aiTurn.actionType) {
+                    CompanionActionType.NONE, CompanionActionType.SPEAK_LOUD,
+                    CompanionActionType.NAVIGATE_ROUTE, CompanionActionType.WHATS_PLAYING -> null
+                    else -> ActionExecutor(context).prepare(aiTurn)
+                }
+                if (preparation is Preparation.Blocked) {
+                    val blockedTurn = aiTurn.copy(
+                        message = preparation.outcome.spoken,
+                        spokenConfirmation = preparation.outcome.spoken,
+                        actionType = CompanionActionType.NONE,
+                        isActionReport = true
+                    )
+                    _chatHistory.value = _chatHistory.value + blockedTurn
+                    if (preparation.outcome is ActionOutcome.NeedsPermission) {
+                        _permissionRequests.tryEmit((preparation.outcome as ActionOutcome.NeedsPermission).permission)
+                    }
+                    characterController.speakWithLipSync(context, tts, blockedTurn.message, activeChar)
+                    return@launch
                 }
 
-                characterController.speakWithLipSync(
-                    context = context,
-                    tts = tts,
-                    text = spokenText,
-                    character = activeChar
-                )
+                _chatHistory.value = _chatHistory.value + aiTurn
+                characterController.speakWithLipSync(context, tts, aiTurn.message, activeChar)
 
-                // Trigger the 3-second 'Undo/Cancel' overlay pill for all actionable voice/text commands
                 when (aiTurn.actionType) {
-                    CompanionActionType.WHATS_PLAYING -> {
+                    CompanionActionType.NONE, CompanionActionType.SPEAK_LOUD -> Unit
+                    CompanionActionType.NAVIGATE_ROUTE, CompanionActionType.WHATS_PLAYING ->
                         executeTurnActionNow(context, tts, aiTurn)
-                    }
-                    CompanionActionType.NONE, CompanionActionType.SPEAK_LOUD -> {
-                        // Conversational reply only — no external navigation/media intent to undo
-                    }
                     else -> {
+                        val ready = (preparation as Preparation.Ready).action
                         voiceCommandService.scheduleActionWithUndoWindow(
                             turn = aiTurn,
-                            durationSeconds = 3
-                        ) { confirmedAction ->
-                            executeTurnActionNow(context, tts, confirmedAction.turn)
+                            durationSeconds = 3,
+                            titleOverride = ready.title
+                        ) { confirmed ->
+                            executeTurnActionNow(context, tts, confirmed.turn)
                         }
                     }
                 }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                android.util.Log.w("CadenceViewModel", "Message handling failed: ${e.javaClass.simpleName}")
+                reportOutcome(context, tts, ActionOutcome.Failed("Something went wrong on my side. Please try again."))
             } finally {
                 _isCompanionThinking.value = false
                 voiceCommandService.clearAwaitingReply()
@@ -889,7 +831,7 @@ class CadenceViewModel(
     fun generateMealsFromFridge() {
         val uid = _currentUserId.value
         if (_isChefCooking.value) return
-        val ingredients = _selectedIngredients.value.toList().ifEmpty { listOf("Eggs", "Rice", "Garlic") }
+        val ingredients = _selectedIngredients.value.toList()
 
         viewModelScope.launch {
             _isChefCooking.value = true
@@ -924,6 +866,9 @@ class CadenceViewModel(
                     _meals.value = generatedMeals + _meals.value
                 }
                 characterController.transitionTo(CharacterRuntimeState.Reacting("happy"))
+            } catch (e: AiUnavailableException) {
+                _chefNote.value = e.message.orEmpty()
+                characterController.transitionTo(CharacterRuntimeState.Idle)
             } finally {
                 _isChefCooking.value = false
             }
@@ -955,7 +900,12 @@ class CadenceViewModel(
                     receiptPhoto = _receiptPhotoBitmap.value
                 )
                 _receiptSplitResult.value = split
+                _receiptError.value = null
                 characterController.transitionTo(CharacterRuntimeState.Reacting("happy"))
+            } catch (e: AiUnavailableException) {
+                _receiptSplitResult.value = null
+                _receiptError.value = e.message
+                characterController.transitionTo(CharacterRuntimeState.Idle)
             } finally {
                 _isSplittingReceipt.value = false
             }
@@ -963,6 +913,8 @@ class CadenceViewModel(
     }
 
     companion object {
+        private val STOP_WORDS = Regex("(?i)^(stop|cancel|never ?mind|undo|توقف|الغاء|إلغاء|بس|لغو|annule|para|stopp)[.!]?$")
+
         fun provideFactory(context: Context): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")

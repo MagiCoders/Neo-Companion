@@ -66,10 +66,25 @@ class CadenceRepositoryRuleTest : FirestoreEmulatorTestBase() {
         }
         assertTrue(observedQuests.size >= 4)
 
-        val observedMeals = runRepoBlocking {
-            repo.observeMeals(uid).first { it.isNotEmpty() }
-        }
-        assertTrue(observedMeals.size >= 2)
+        assertEquals(0, profile.xp)
+        assertEquals(0, profile.goldCoins)
+    }
+
+    @Test
+    fun `a user cannot make themselves Pro or refill their own AI credits`() {
+        val uid = signInTestUser("cheater@example.com")
+        val repo = CadenceRepository(context, firestore)
+        runRepoBlocking { repo.ensureUserProfileInitialized(uid, "Cheater", "cheater@example.com") }
+        val doc = firestore.collection("users").document(uid)
+
+        val makePro = runCatching { awaitTask(doc.update("isProSubscriber", true)) }
+        assertTrue("client must not be able to grant Pro", makePro.isFailure)
+
+        val refill = runCatching { awaitTask(doc.update("aiCreditsRemaining", 9999)) }
+        assertTrue("client must not be able to raise credits", refill.isFailure)
+
+        val spend = runCatching { awaitTask(doc.update(mapOf("aiCreditsRemaining" to 14))) }
+        assertTrue("spending one credit is allowed", spend.isSuccess)
     }
 
     @Test

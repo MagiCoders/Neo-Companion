@@ -15,10 +15,6 @@ import com.example.data.CompanionChatTurn
 import com.example.data.MochiHashRoutes
 import com.example.data.QuestCategory
 import com.example.ui.character.CharacterSpec
-import com.google.firebase.Firebase
-import com.google.firebase.ai.ai
-import com.google.firebase.ai.type.Schema
-import com.google.firebase.ai.type.generationConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -57,14 +53,10 @@ data class PendingVoiceAction(
 
 /**
  * VoiceCommandService:
- * 1. Uses Firebase AI Logic (`Firebase.ai.generativeModel("gemini-3.8-flash")`) for natural language
- *    processing with structured JSON schema output.
+ * 1. Understands commands in any language through [CompanionBrain] (Gemini via Firebase AI Logic).
  * 2. Maintains a global, persistent `'Hi Mochi'` wake-word listening loop across all app screens
  *    whenever `wakeWordEnabled` is active.
- * 3. Provides an instant intent-based router (`routeInstantIntent`) that handles WhatsApp (calls,
- *    contacts, chat & voice messages), YouTube (search, play, what's playing), Browser search,
- *    Social Media, Media playback, and HashRouter screen navigation with zero delay.
- * 4. Manages a 3-second `'Undo/Cancel'` countdown state (`pendingAction`) so users can abort any
+ * 3. Manages a 3-second `'Undo/Cancel'` countdown state (`pendingAction`) so users can abort any
  *    voice-triggered navigation or media/app launch by tapping Undo/Cancel or saying "stop" / "cancel".
  */
 class VoiceCommandService(
@@ -169,45 +161,7 @@ class VoiceCommandService(
     private val onExecutePendingActionCallback: ((PendingVoiceAction) -> Unit)?
         get() = pendingExecuteOverride ?: callbackStack.lastOrNull()?.second?.onExecutePending
 
-    private val nlpSchema = Schema.obj(
-        properties = mapOf(
-            "reply" to Schema.string(description = "Warm, concise spoken response (1-2 sentences)."),
-            "spokenConfirmation" to Schema.string(description = "Short confirmation read aloud by TTS."),
-            "actionType" to Schema.enumeration(
-                values = listOf(
-                    "NONE",
-                    "WHATSAPP",
-                    "WHATSAPP_CALL",
-                    "WHATSAPP_CONTACTS",
-                    "WHATSAPP_READ_CHAT",
-                    "TELEGRAM",
-                    "SIM_CALL",
-                    "SOCIAL_CALL",
-                    "SOCIAL_SEARCH",
-                    "YOUTUBE",
-                    "WHATS_PLAYING",
-                    "BROWSER_SEARCH",
-                    "OPEN_MEDIA",
-                    "NAVIGATE_ROUTE",
-                    "SPEAK_LOUD"
-                ),
-                description = "Resolved intent type for the user's command."
-            ),
-            "actionRecipient" to Schema.string(description = "Contact name, platform, or route name."),
-            "actionPayload" to Schema.string(description = "Search query, message body, or hash route.")
-        )
-    )
-
-    private val nlpModel by lazy {
-        Firebase.ai.generativeModel(
-            modelName = "gemini-3.8-flash",
-            generationConfig = generationConfig {
-                temperature = 0.25f
-                responseMimeType = "application/json"
-                responseSchema = nlpSchema
-            }
-        )
-    }
+    private val brain = CompanionBrain()
 
     // ------------------------------------------------------------------------------------------
     // Callback binding
@@ -629,107 +583,26 @@ class VoiceCommandService(
         override fun onEvent(eventType: Int, params: Bundle?) {}
     }
 
-    /**
-     * Instant Intent-Based Router + Firebase AI NLP Processor:
-     * 1. Immediately checks deterministic local rules (<10ms) for WhatsApp, YouTube, Browser,
-     *    Social Media, Media playback, and HashRouter navigation.
-     * 2. If matched locally, returns immediately so the 3-second Undo/Cancel pill appears with
-     *    zero delay.
-     * 3. Otherwise invokes Firebase AI (`gemini-3.8-flash`) with a 60s timeout to classify
-     *    complex natural language requests into structured `CompanionChatTurn` intents.
-     */
+    /** Understands one utterance. Throws [AiUnavailableException] when the AI can't answer. */
     suspend fun processNaturalLanguageCommand(
         commandText: String,
-        companion: CharacterSpec
-    ): CompanionChatTurn = withContext(Dispatchers.Default) {
+        companion: CharacterSpec,
+        userName: String = "",
+        history: List<CompanionChatTurn> = emptyList()
+    ): CompanionChatTurn {
         val trimmed = commandText.trim()
-        // 1. Check abort / undo intent first
         if (ABORT_COMMAND_REGEX.matches(trimmed)) {
             cancelPendingAction()
-            return@withContext CompanionChatTurn(
+            return CompanionChatTurn(
                 id = UUID.randomUUID().toString(),
                 senderIsUser = false,
-                message = "Cancelled. I stopped the action.",
-                spokenConfirmation = "Cancelled.",
-                actionType = CompanionActionType.NONE
+                message = "Okay, cancelled.",
+                spokenConfirmation = "Okay, cancelled.",
+                isActionReport = true
             )
         }
-
-        // 2. Zero-delay local intent router for WhatsApp, YouTube, Browser, Social, Media, and Routes
-        OmnichannelMediaBridge.parseInstantVoiceCommand(
-            userMessage = trimmed,
-            companionName = companion.displayName
-        )?.let { instantTurn ->
-            return@withContext instantTurn
-        }
-
-        // 3. Firebase AI Logic (`gemini-3.8-flash`) structured NLP fallback
-        try {
-            val prompt = """
-                You are ${companion.displayName}, a voice-first Android companion in MochiLife.
-                User command: "$trimmed"
-                Classify the user's request into the appropriate actionType:
-                - WHATSAPP_CALL: calling a contact on WhatsApp
-                - WHATSAPP_CONTACTS: opening WhatsApp contact list
-                - WHATSAPP_READ_CHAT: opening WhatsApp chat for a contact and reading their voice/text message
-                - WHATSAPP: sending a WhatsApp message to a contact
-                - YOUTUBE: opening YouTube or searching for a YouTube video
-                - WHATS_PLAYING: telling the user what song/video is playing right now
-                - BROWSER_SEARCH: searching in the web browser or opening a website
-                - SOCIAL_SEARCH: checking posts or searching news on Instagram, X, TikTok, Reddit, or social media
-                - OPEN_MEDIA: playing music, sounds, or videos
-                - NAVIGATE_ROUTE: switching to an internal app route (${MochiHashRoutes.STAGE}, ${MochiHashRoutes.PANTRY}, ${MochiHashRoutes.QUESTS}, ${MochiHashRoutes.TOOLS}, ${MochiHashRoutes.LIBRARY}, ${MochiHashRoutes.PROFILE}, ${MochiHashRoutes.DRIVING})
-                - NONE: general conversation
-            """.trimIndent()
-
-            val response = withTimeout(60_000L) {
-                nlpModel.generateContent(prompt)
-            }
-            val rawJson = response.text ?: throw IllegalStateException("Empty Firebase AI response")
-            val json = JSONObject(rawJson)
-            val actionName = json.optString("actionType", "NONE").uppercase()
-            val resolvedType = CompanionActionType.entries.firstOrNull { it.name == actionName }
-                ?: CompanionActionType.NONE
-            val reply = json.optString("reply", "On it right away.")
-            val spoken = json.optString("spokenConfirmation", reply)
-            val recipient = json.optString("actionRecipient", "")
-            val payload = json.optString("actionPayload", trimmed)
-
-            CompanionChatTurn(
-                id = UUID.randomUUID().toString(),
-                senderIsUser = false,
-                message = reply,
-                spokenConfirmation = spoken,
-                actionType = resolvedType,
-                actionRecipient = recipient,
-                actionPayload = payload,
-                suggestedQuestCategory = QuestCategory.DAY
-            )
-        } catch (e: TimeoutCancellationException) {
-            Log.e(TAG, "Firebase AI NLP timed out", e)
-            _lastError.value = "Voice AI request timed out."
-            OmnichannelMediaBridge.parseInstantVoiceCommand(trimmed, companion.displayName)
-                ?: CompanionChatTurn(
-                    id = UUID.randomUUID().toString(),
-                    senderIsUser = false,
-                    message = "I heard \"$trimmed\". Let me help with that right away.",
-                    spokenConfirmation = "Let me help with that right away.",
-                    actionType = CompanionActionType.NONE
-                )
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.e(TAG, "Firebase AI NLP error: ${e.message}", e)
-            _lastError.value = e.localizedMessage
-            OmnichannelMediaBridge.parseInstantVoiceCommand(trimmed, companion.displayName)
-                ?: CompanionChatTurn(
-                    id = UUID.randomUUID().toString(),
-                    senderIsUser = false,
-                    message = "Got it! Tell me if you'd like me to open WhatsApp, YouTube, or search the web for \"$trimmed\".",
-                    spokenConfirmation = "Got it! I'm ready.",
-                    actionType = CompanionActionType.NONE
-                )
-        }
+        // Throws AiUnavailableException on failure; callers show an honest error.
+        return brain.understand(trimmed, companion, userName, history)
     }
 
     /**
@@ -739,6 +612,7 @@ class VoiceCommandService(
     fun scheduleActionWithUndoWindow(
         turn: CompanionChatTurn,
         durationSeconds: Int = 3,
+        titleOverride: String? = null,
         onExecuteConfirmed: ((PendingVoiceAction) -> Unit)? = null
     ) {
         if (turn.actionType == CompanionActionType.NONE || turn.actionType == CompanionActionType.SPEAK_LOUD) {
@@ -761,13 +635,14 @@ class VoiceCommandService(
             CompanionActionType.TELEGRAM -> "Opening Telegram · ${turn.actionRecipient}"
             else -> turn.actionType.label
         }
+        val finalTitle = titleOverride ?: title
         val safeTotal = durationSeconds.coerceAtLeast(1)
         val subtitle = "Executing in ${safeTotal}s · Tap Undo or say \"stop\" to cancel"
 
         val pending = PendingVoiceAction(
             id = turn.id,
             turn = turn,
-            title = title,
+            title = finalTitle,
             subtitle = subtitle,
             actionType = turn.actionType,
             targetRecipient = turn.actionRecipient,
@@ -836,8 +711,8 @@ class VoiceCommandService(
         turn: CompanionChatTurn,
         companion: CharacterSpec,
         onNavigateRoute: (String) -> Unit
-    ) {
-        OmnichannelMediaBridge.autoExecuteCompanionAction(
+    ): com.example.actions.ActionOutcome {
+        return OmnichannelMediaBridge.autoExecuteCompanionAction(
             context = context,
             tts = tts,
             turn = turn,

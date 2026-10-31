@@ -71,7 +71,6 @@ import com.example.ui.character.CharacterStageView
 import com.example.ui.components.VoiceUndoCancelOverlay
 import com.example.ui.screens.AuthScreen
 import com.example.ui.screens.CharacterPickerScreen
-import com.example.ui.screens.ComponentGalleryScreen
 import com.example.ui.screens.DrivingModeScreen
 import com.example.ui.screens.EditProfileScreen
 import com.example.ui.screens.HelpAndFeedbackScreen
@@ -130,7 +129,6 @@ enum class MochiScreenRoute(val hashRoute: String) {
     TOOLS_GRID(MochiHashRoutes.TOOLS),
     SINGLE_TOOL(MochiHashRoutes.SINGLE_TOOL),
     TOOL_RESULT(MochiHashRoutes.TOOL_RESULT),
-    COMPONENT_GALLERY(MochiHashRoutes.COMPONENT_GALLERY),
     LIBRARY(MochiHashRoutes.LIBRARY),
     SEARCH(MochiHashRoutes.SEARCH),
     PROFILE_SETTINGS(MochiHashRoutes.PROFILE),
@@ -350,6 +348,29 @@ fun MochiAppHost(
     val pendingVoiceAction by viewModel.pendingVoiceAction.collectAsStateWithLifecycle()
     val isWakeWordListeningActive by viewModel.isWakeWordListeningActive.collectAsStateWithLifecycle()
     val livePartialTranscript by viewModel.liveVoicePartialTranscript.collectAsStateWithLifecycle()
+    val libraryEntries by viewModel.libraryEntries.collectAsStateWithLifecycle()
+    val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
+
+    fun openLibraryEntry(entry: com.example.data.LibraryEntry) {
+        when (entry.kind) {
+            com.example.data.LibraryEntry.Kind.RECIPE -> {
+                activeTool = MochiToolTile.FRIDGE_CHEF
+                viewModel.navigateHash(MochiHashRoutes.PANTRY)
+            }
+            com.example.data.LibraryEntry.Kind.QUEST -> viewModel.navigateHash(MochiHashRoutes.QUESTS)
+            com.example.data.LibraryEntry.Kind.FILE -> entry.file?.let { f ->
+                val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", f)
+                val mime = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase()) ?: "*/*"
+                val view = android.content.Intent(android.content.Intent.ACTION_VIEW)
+                    .setDataAndType(uri, mime)
+                    .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                try {
+                    context.startActivity(android.content.Intent.createChooser(view, f.name))
+                } catch (_: android.content.ActivityNotFoundException) {
+                }
+            }
+        }
+    }
 
     var ttsInstance by remember { mutableStateOf<TextToSpeech?>(null) }
     DisposableEffect(context) {
@@ -556,7 +577,9 @@ fun MochiAppHost(
                             onToggleFloatingCompanionMode = { wantsFloat -> if (wantsFloat) launchFloatingCompanion() },
                             isListening = isWakeWordListeningActive,
                             livePartialTranscript = livePartialTranscript,
-                            onMicTap = { onMicTapped() }
+                            onMicTap = { onMicTapped() },
+                            recentEntry = libraryEntries.firstOrNull(),
+                            onOpenRecent = { openLibraryEntry(it) }
                         )
                     }
 
@@ -581,9 +604,7 @@ fun MochiAppHost(
                     MochiHashRoutes.TOOLS -> {
                         ToolsGridScreen(
                             onSelectTool = { tile ->
-                                if (tile == MochiToolTile.COMPONENT_GALLERY) {
-                                    viewModel.navigateHash(MochiHashRoutes.COMPONENT_GALLERY)
-                                } else if (tile == MochiToolTile.FRIDGE_CHEF) {
+                                if (tile == MochiToolTile.FRIDGE_CHEF) {
                                     activeTool = tile
                                     viewModel.navigateHash(MochiHashRoutes.PANTRY)
                                 } else {
@@ -599,7 +620,18 @@ fun MochiAppHost(
                             },
                             onOpenProfile = {
                                 viewModel.navigateHash(MochiHashRoutes.PROFILE)
-                            }
+                            },
+                            onAskCompanion = { prompt ->
+                                viewModel.navigateHash(MochiHashRoutes.STAGE)
+                                showConversationSheet = true
+                                viewModel.sendMessageToMochi(context, ttsInstance, prompt)
+                            },
+                            onStartVoice = {
+                                viewModel.navigateHash(MochiHashRoutes.STAGE)
+                                onMicTapped()
+                            },
+                            recentFile = libraryEntries.firstOrNull { it.kind == com.example.data.LibraryEntry.Kind.FILE },
+                            onOpenFile = { openLibraryEntry(it) }
                         )
                     }
 
@@ -679,45 +711,33 @@ fun MochiAppHost(
                         }
                     }
 
-                    MochiHashRoutes.COMPONENT_GALLERY -> {
-                        ComponentGalleryScreen(
-                            onSelectAccentCharacter = { spec ->
-                                viewModel.chooseCharacter(spec)
-                            },
-                            onBack = {
-                                viewModel.navigateHash(MochiHashRoutes.TOOLS)
-                            },
-                            onSelectVisualStyle = viewModel::selectVisualStyle
-                        )
-                    }
-
                     MochiHashRoutes.LIBRARY -> {
                         LibraryScreen(
+                            entries = libraryEntries,
                             onOpenSearch = { viewModel.navigateHash(MochiHashRoutes.SEARCH) },
                             onOpenProfile = { viewModel.navigateHash(MochiHashRoutes.PROFILE) },
-                            onOpenFridgeChef = {
-                                activeTool = MochiToolTile.FRIDGE_CHEF
-                                viewModel.navigateHash(MochiHashRoutes.PANTRY)
-                            },
+                            onOpenEntry = { entry -> openLibraryEntry(entry) },
                             onOpenTools = { viewModel.navigateHash(MochiHashRoutes.TOOLS) }
                         )
                     }
 
                     MochiHashRoutes.SEARCH -> {
                         SearchScreen(
-                            onBack = { viewModel.navigateHash(MochiHashRoutes.LIBRARY) },
-                            onOpenFridgeChef = {
-                                activeTool = MochiToolTile.FRIDGE_CHEF
-                                viewModel.navigateHash(MochiHashRoutes.PANTRY)
-                            },
-                            onOpenTools = { viewModel.navigateHash(MochiHashRoutes.TOOLS) }
+                            entries = libraryEntries,
+                            onBack = { viewModel.popHashBack() },
+                            onOpenEntry = { entry -> openLibraryEntry(entry) },
+                            onAskCompanion = { q ->
+                                viewModel.navigateHash(MochiHashRoutes.STAGE)
+                                showConversationSheet = true
+                                viewModel.sendMessageToMochi(context, ttsInstance, q)
+                            }
                         )
                     }
 
                     MochiHashRoutes.QUESTS -> {
                         QuestsScreen(
                             quests = quests,
-                            aiEnergyBalance = settings.aiEnergyBalance,
+                            aiEnergyBalance = userProfile.goldCoins,
                             onToggleQuest = viewModel::toggleQuestCompleted,
                             onAddQuest = viewModel::addQuest,
                             onBack = { viewModel.navigateHash(MochiHashRoutes.STAGE) }
@@ -734,6 +754,7 @@ fun MochiAppHost(
                                 )
                             },
                             settings = settings,
+                            profile = userProfile,
                             onUpdateSettings = viewModel::updateSettings,
                             onOpenEditProfile = { viewModel.navigateHash(MochiHashRoutes.EDIT_PROFILE) },
                             onOpenWallet = { viewModel.navigateHash(MochiHashRoutes.WALLET) },
@@ -743,9 +764,9 @@ fun MochiAppHost(
                             onOpenPermissions = { viewModel.navigateHash(MochiHashRoutes.PERMISSIONS) },
                             onOpenPrivacyData = { viewModel.navigateHash(MochiHashRoutes.PRIVACY) },
                             onOpenHelpFeedback = { viewModel.navigateHash(MochiHashRoutes.HELP) },
-                            onOpenComponentGallery = { viewModel.navigateHash(MochiHashRoutes.COMPONENT_GALLERY) },
                             onSignOut = {
                                 viewModel.voiceCommandService.stopListening()
+                                viewModel.clearLocalPersonalData()
                                 com.google.firebase.auth.FirebaseAuth.getInstance().signOut()
                             },
                             onBack = { viewModel.navigateHash(MochiHashRoutes.STAGE) }
@@ -762,8 +783,7 @@ fun MochiAppHost(
 
                     MochiHashRoutes.WALLET -> {
                         WalletScreen(
-                            settings = settings,
-                            onUpdateSettings = viewModel::updateSettings,
+                            profile = userProfile,
                             onBack = { viewModel.navigateHash(MochiHashRoutes.PROFILE) }
                         )
                     }

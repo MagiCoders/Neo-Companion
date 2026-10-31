@@ -85,7 +85,7 @@ object UniversalConverterEngine {
             "Image analyzed (${imageBitmap.width}x${imageBitmap.height}px). Ready to save or share as text."
         }
 
-        val txtFile = File(context.cacheDir, "extracted_text_${System.currentTimeMillis()}.txt")
+        val txtFile = File(com.example.data.LibraryStore.dir(context), "extracted_text_${System.currentTimeMillis()}.txt")
         txtFile.writeText(extracted)
 
         ConversionOutputResult(
@@ -106,7 +106,7 @@ object UniversalConverterEngine {
         context: Context,
         imageBitmap: Bitmap
     ): ConversionOutputResult = withContext(Dispatchers.IO) {
-        val outFile = File(context.cacheDir, "converted_image_${System.currentTimeMillis()}.pdf")
+        val outFile = File(com.example.data.LibraryStore.dir(context), "converted_image_${System.currentTimeMillis()}.pdf")
         val pdf = PdfDocument()
 
         val pageWidth = imageBitmap.width.coerceIn(595, 2480)
@@ -155,7 +155,7 @@ object UniversalConverterEngine {
             FileOutputStream(tempPdf).use { output -> input.copyTo(output) }
         }
 
-        val outPng = File(context.cacheDir, "pdf_page_1_${System.currentTimeMillis()}.png")
+        val outPng = File(com.example.data.LibraryStore.dir(context), "pdf_page_1_${System.currentTimeMillis()}.png")
         var pageCount = 1
         var widthPx = 1240
         var heightPx = 1754
@@ -195,7 +195,9 @@ object UniversalConverterEngine {
         inputText: String
     ): ConversionOutputResult {
         val clean = inputText.trim().ifEmpty { "Hello from MochiLife. Your audio file is ready." }
-        val wavFile = OmnichannelMediaBridge.generateVoiceNoteFile(context, tts, clean)
+        val wavFile = OmnichannelMediaBridge.generateVoiceNoteFile(context, tts, clean).let { f ->
+            File(com.example.data.LibraryStore.dir(context), f.name).also { dest -> if (!f.renameTo(dest)) f.copyTo(dest, overwrite = true) }
+        }
         return ConversionOutputResult(
             toolMode = ConversionToolMode.TEXT_TO_VOICE,
             outputFile = wavFile,
@@ -233,7 +235,7 @@ object UniversalConverterEngine {
             "Audio file decoded (${bytes.size / 1024} KB, format: $mime)."
         }
 
-        val outTxt = File(context.cacheDir, "audio_transcript_${System.currentTimeMillis()}.txt")
+        val outTxt = File(com.example.data.LibraryStore.dir(context), "audio_transcript_${System.currentTimeMillis()}.txt")
         outTxt.writeText(transcript)
 
         ConversionOutputResult(
@@ -254,7 +256,7 @@ object UniversalConverterEngine {
         context: Context,
         videoUri: Uri
     ): ConversionOutputResult = withContext(Dispatchers.IO) {
-        val outAudio = File(context.cacheDir, "extracted_audio_${System.currentTimeMillis()}.m4a")
+        val outAudio = File(com.example.data.LibraryStore.dir(context), "extracted_audio_${System.currentTimeMillis()}.m4a")
         var extractedTrackSuccess = false
 
         try {
@@ -332,7 +334,7 @@ object UniversalConverterEngine {
         bodyContent: String
     ): ConversionOutputResult = withContext(Dispatchers.IO) {
         val cleanBody = bodyContent.trim().ifEmpty { "Converted document" }
-        val outFile = File(context.cacheDir, "document_export_${System.currentTimeMillis()}.pdf")
+        val outFile = File(com.example.data.LibraryStore.dir(context), "document_export_${System.currentTimeMillis()}.pdf")
 
         val pdf = PdfDocument()
         val pageWidth = 595

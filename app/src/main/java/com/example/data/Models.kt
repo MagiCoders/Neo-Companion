@@ -50,13 +50,15 @@ object MochiHashRoutes {
     const val CHARACTER_PICKER = "#/character-picker"
     const val SINGLE_TOOL = "#/tools/single"
     const val TOOL_RESULT = "#/tools/result"
-    const val COMPONENT_GALLERY = "#/gallery"
+
+    /** Screens the AI is allowed to open by voice. */
+    val ALL: List<String> = listOf(STAGE, PANTRY, QUESTS, TOOLS, LIBRARY, SEARCH, PROFILE, WALLET, PERMISSIONS, PRIVACY, HELP, BUSY, DRIVING, CHARACTER_PICKER)
 }
 
 data class MochiPersistentSettings(
-    val userName: String = "Your name",
+    val userName: String = "",
     val userNickname: String = "",
-    val userAboutBio: String = "Vegetarian on weekdays, enjoys quick 15-minute dinners and calm evening focus.",
+    val userAboutBio: String = "",
     val preferredLanguage: String = "English",
     val floatingCompanionEnabled: Boolean = true,
     val wakeWordEnabled: Boolean = false,
@@ -71,9 +73,6 @@ data class MochiPersistentSettings(
     val isDarkTheme: Boolean = true,
     /** 0 = Dark, 1 = Light, 2 = Auto (follow the phone). */
     val themeMode: Int = 0,
-    val aiEnergyBalance: Int = 1240,
-    val checkedInToday: Boolean = false,
-    val streakDays: Int = 4,
     val allowedPermissions: Set<String> = setOf(
         "Microphone",
         "Display over other apps",
@@ -86,14 +85,14 @@ data class MochiPersistentSettings(
 
 data class UserProfile(
     val userId: String = "",
-    val displayName: String = "Member",
+    val displayName: String = "",
     val email: String = "",
-    val companionName: String = "Nurse Elena",
+    val companionName: String = "",
     val level: Int = 1,
-    val xp: Int = 60,
-    val goldCoins: Int = 120,
-    val streakDays: Int = 3,
-    val moneySavedDollars: Int = 45,
+    val xp: Int = 0,
+    val goldCoins: Int = 0,
+    val streakDays: Int = 0,
+    val moneySavedDollars: Int = 0,
     val aiCreditsRemaining: Int = 15,
     val aiCreditsMax: Int = 15,
     val isProSubscriber: Boolean = false,
@@ -147,19 +146,22 @@ data class CompanionChatTurn(
     val id: String,
     val senderIsUser: Boolean,
     val message: String,
-    val moodTag: String = "Calm",
-    val detectedLanguage: String = "English",
-    val detectedTone: String = "Balanced",
-    val angerOrStressPercent: Int = 18,
-    val behavioralInsight: String = "Keeping tasks simple and direct.",
-    val verificationReport: String = "Context and parameters checked.",
-    val spokenConfirmation: String = "Ready whenever you need.",
+    val moodTag: String = "",
+    val detectedLanguage: String = "",
+    val detectedTone: String = "",
+    val angerOrStressPercent: Int = 0,
+    val behavioralInsight: String = "",
+    /** Kept for stored history compatibility; never filled with invented text. */
+    val verificationReport: String = "",
+    val spokenConfirmation: String = "",
     val actionType: CompanionActionType = CompanionActionType.NONE,
     val actionRecipient: String = "",
     val actionPayload: String = "",
     val suggestedQuestTitle: String? = null,
     val suggestedQuestCategory: QuestCategory = QuestCategory.DAY,
-    val xpBonus: Int = 25
+    val xpBonus: Int = 0,
+    /** True when this turn reports an action outcome (so the UI never shows a countdown for it). */
+    val isActionReport: Boolean = false
 )
 
 data class FridgeIngredientChip(

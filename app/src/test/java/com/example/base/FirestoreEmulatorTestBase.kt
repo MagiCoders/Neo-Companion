@@ -114,8 +114,8 @@ abstract class FirestoreEmulatorTestBase {
   private fun deleteUrl(urlString: String) {
     val conn = URL(urlString).openConnection() as HttpURLConnection
     conn.requestMethod = "DELETE"
-    conn.connectTimeout = 2000
-    conn.readTimeout = 2000
+    conn.connectTimeout = 5000
+    conn.readTimeout = 30000
     try {
       conn.responseCode
     } finally {

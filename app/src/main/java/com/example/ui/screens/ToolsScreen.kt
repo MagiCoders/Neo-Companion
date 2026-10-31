@@ -157,13 +157,6 @@ enum class MochiToolTile(
         subtitle = "3 meals under 15 min",
         icon = Icons.Outlined.RestaurantMenu,
         conversionMode = null
-    ),
-    COMPONENT_GALLERY(
-        id = "component_gallery",
-        title = "Component gallery",
-        subtitle = "Inspect design tokens, typography, and glass surfaces",
-        icon = Icons.Outlined.Palette,
-        conversionMode = null
     )
 }
 
@@ -177,6 +170,10 @@ fun ToolsGridScreen(
     onBack: () -> Unit,
     onOpenSearch: () -> Unit = {},
     onOpenProfile: () -> Unit = {},
+    onAskCompanion: (String) -> Unit = {},
+    onStartVoice: () -> Unit = {},
+    recentFile: com.example.data.LibraryEntry? = null,
+    onOpenFile: (com.example.data.LibraryEntry) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val accent = LocalCharacterAccent.current
@@ -406,13 +403,13 @@ fun ToolsGridScreen(
                 FeaturedToolCard(
                     icon = Icons.Outlined.ReceiptLong,
                     title = "Bill splitter",
-                    subtitle = "Snap a receipt, split it fairly",
+                    subtitle = "Coming soon with Snap",
                     cardBg = cardBg,
                     borderCol = borderCol,
                     goldAccent = goldAccent,
                     textPrimary = textPrimary,
                     textSecondary = textSecondary,
-                    onClick = { onSelectTool(MochiToolTile.IMAGE_TO_TEXT) },
+                    onClick = { onAskCompanion("Help me split a bill") },
                     modifier = Modifier.weight(1f)
                 )
                 FeaturedToolCard(
@@ -441,7 +438,7 @@ fun ToolsGridScreen(
                     goldAccent = goldAccent,
                     textPrimary = textPrimary,
                     textSecondary = textSecondary,
-                    onClick = { onSelectTool(MochiToolTile.SPEECH_TO_TEXT) },
+                    onClick = onStartVoice,
                     modifier = Modifier.weight(1f)
                 )
                 FeaturedToolCard(
@@ -453,7 +450,7 @@ fun ToolsGridScreen(
                     goldAccent = goldAccent,
                     textPrimary = textPrimary,
                     textSecondary = textSecondary,
-                    onClick = { onSelectTool(MochiToolTile.TEXT_TO_SPEECH) },
+                    onClick = { onAskCompanion("Can we do a quick mood check-in?") },
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -508,14 +505,14 @@ fun ToolsGridScreen(
             }
         }
 
-        // Recent converted file card ("Lease agreement.pdf" / "Made from 4 photos · just now" / "Share")
-        Row(
+        // Most recent file you created (hidden when there is none)
+        if (recentFile != null) Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(MochiShapes.card)
                 .background(cardBg)
                 .border(1.dp, borderCol, MochiShapes.card)
-                .clickable { onSelectTool(MochiToolTile.DOC_TO_PDF) }
+                .clickable { onOpenFile(recentFile) }
                 .padding(MochiSpacing.md),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
@@ -540,19 +537,19 @@ fun ToolsGridScreen(
                 }
                 Column {
                     Text(
-                        text = "Lease agreement.pdf",
+                        text = recentFile.title,
                         style = MochiType.Body.copy(fontWeight = FontWeight.SemiBold),
                         color = textPrimary
                     )
                     Text(
-                        text = "Made from 4 photos · just now",
+                        text = recentFile.subtitle,
                         style = MochiType.Label,
                         color = textSecondary
                     )
                 }
             }
             Text(
-                text = "Share",
+                text = "Open",
                 style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold),
                 color = goldAccent
             )
@@ -1113,7 +1110,6 @@ fun SingleToolScreen(
                         }
                         MochiToolTile.DOC_TO_PDF -> onRunDocToPdf(tool.title, textInput)
                         MochiToolTile.FRIDGE_CHEF -> onGenerateMeals()
-                        MochiToolTile.COMPONENT_GALLERY -> {}
                     }
                 }
                 .testTag("tool_primary_action_button"),

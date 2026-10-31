@@ -73,10 +73,10 @@ class CadenceRepository(
                     "email" to safeEmail,
                     "companionName" to "Mochi",
                     "level" to 1,
-                    "xp" to 60,
-                    "goldCoins" to 120,
-                    "streakDays" to 3,
-                    "moneySavedDollars" to 45,
+                    "xp" to 0,
+                    "goldCoins" to 0,
+                    "streakDays" to 0,
+                    "moneySavedDollars" to 0,
                     "aiCreditsRemaining" to 15,
                     "aiCreditsMax" to 15,
                     "isProSubscriber" to false,
@@ -84,7 +84,7 @@ class CadenceRepository(
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
                 docRef.set(payload).await()
-                seedStarterQuestsAndMeals(userId)
+                seedStarterQuests(userId)
                 docRef.get().await().toUserProfile()
                     ?: UserProfile(userId = userId, displayName = safeName, email = safeEmail)
             }
@@ -93,7 +93,7 @@ class CadenceRepository(
         }
     }
 
-    private suspend fun seedStarterQuestsAndMeals(userId: String) {
+    private suspend fun seedStarterQuests(userId: String) {
         createQuest(
             userId = userId,
             title = "Cook 1 quick 15-min meal from your fridge tonight",
@@ -121,27 +121,6 @@ class CadenceRepository(
             category = QuestCategory.DAY,
             xpReward = 100,
             coinsReward = 35
-        )
-
-        createMeal(
-            userId = userId,
-            title = "Golden Garlic & Egg Silky Fried Rice",
-            ingredientsUsed = "Eggs, Cooked Rice, Garlic, Butter, Soy Sauce, Scallions",
-            prepTimeMinutes = 12,
-            calories = 460,
-            moneySavedDollars = 24,
-            stepsSummary = "1. Whisk 2 eggs with a pinch of salt until fluffy.\n2. Melt butter in a hot skillet and sizzle minced garlic for 30 seconds.\n3. Toss in cold rice, splash soy sauce, and fold in the golden eggs.",
-            isCooked = false
-        )
-        createMeal(
-            userId = userId,
-            title = "Creamy 10-Minute Lemon Parmesan Skillet Pasta",
-            ingredientsUsed = "Pasta, Cheese, Garlic, Olive Oil, Black Pepper",
-            prepTimeMinutes = 10,
-            calories = 510,
-            moneySavedDollars = 26,
-            stepsSummary = "1. Boil pasta in salted water and reserve 1/2 cup starchy pasta water.\n2. Toast garlic and black pepper in olive oil for 45 seconds.\n3. Toss pasta with grated cheese and starchy water until glossy and creamy.",
-            isCooked = false
         )
     }
 
@@ -355,55 +334,6 @@ class CadenceRepository(
                 .update(
                     mapOf(
                         "aiCreditsRemaining" to updatedRemaining,
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                )
-                .await()
-            return true
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.UPDATE, path)
-        }
-    }
-
-    suspend fun upgradeToProPass(
-        userId: String,
-        currentProfile: UserProfile
-    ) {
-        val path = "users/$userId"
-        try {
-            firestore.collection("users")
-                .document(userId)
-                .update(
-                    mapOf(
-                        "isProSubscriber" to true,
-                        "aiCreditsRemaining" to 999,
-                        "aiCreditsMax" to 999,
-                        "goldCoins" to (currentProfile.goldCoins + 500).coerceAtMost(1000000),
-                        "xp" to (currentProfile.xp + 250).coerceAtMost(1000000),
-                        "level" to (((currentProfile.xp + 250) / 200) + 1).coerceIn(1, 999),
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                )
-                .await()
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.UPDATE, path)
-        }
-    }
-
-    suspend fun refillAiAllowanceWithCoins(
-        userId: String,
-        currentProfile: UserProfile
-    ): Boolean {
-        val cost = 50
-        if (currentProfile.goldCoins < cost) return false
-        val path = "users/$userId"
-        try {
-            firestore.collection("users")
-                .document(userId)
-                .update(
-                    mapOf(
-                        "goldCoins" to (currentProfile.goldCoins - cost).coerceAtLeast(0),
-                        "aiCreditsRemaining" to currentProfile.aiCreditsMax,
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
                 )

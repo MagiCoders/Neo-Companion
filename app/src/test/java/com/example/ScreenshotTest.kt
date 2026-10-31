@@ -90,22 +90,22 @@ class ScreenshotTest(private val light: Boolean) {
 
     @Test fun tools() = shot("03_tools", MochiMainTab.TOOLS) { ToolsGridScreen(onSelectTool = {}, onBack = {}) }
 
-    @Test fun library() = shot("04_library", MochiMainTab.LIBRARY) { LibraryScreen({}, {}, {}, {}) }
+    @Test fun library() = shot("04_library", MochiMainTab.LIBRARY) { LibraryScreen(entries = emptyList(), onOpenSearch = {}, onOpenProfile = {}, onOpenEntry = {}, onOpenTools = {}) }
 
-    @Test fun search() = shot("05_search") { SearchScreen({}, {}, {}) }
+    @Test fun search() = shot("05_search") { SearchScreen(entries = emptyList(), onBack = {}, onOpenEntry = {}, onAskCompanion = {}) }
 
     @Test fun settings() = shot("06_settings") {
         ProfileAndSettingsScreen(
             activeCharacter = CharacterSpec.ELENA, isDarkTheme = !light, onToggleDarkTheme = {},
             onOpenEditProfile = {}, onOpenWallet = {}, onOpenCharacterPicker = {}, onOpenWhenBusy = {},
             onOpenDrivingMode = {}, onOpenPermissions = {}, onOpenPrivacyData = {}, onOpenHelpFeedback = {},
-            onOpenComponentGallery = {}, onBack = {}, settings = settings
+            onBack = {}, settings = settings
         )
     }
 
     @Test fun editProfile() = shot("07_edit_profile") { EditProfileScreen(onBack = {}, settings = settings) }
 
-    @Test fun wallet() = shot("08_wallet") { WalletScreen(onBack = {}, settings = settings) }
+    @Test fun wallet() = shot("08_wallet") { WalletScreen(onBack = {}, profile = com.example.data.UserProfile(userId = "u1", aiCreditsRemaining = 9, aiCreditsMax = 15, goldCoins = 40, level = 2)) }
 
     @Test fun busy() = shot("09_when_busy") { WhenYouAreBusyScreen(onBack = {}, settings = settings) }
 

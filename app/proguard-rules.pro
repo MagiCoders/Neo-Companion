@@ -19,3 +19,16 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# ---- MochiLife release hardening ----
+# Strip verbose/debug/info logging from release builds so nothing sensitive reaches logcat.
+-assumenosideeffects class android.util.Log {
+    public static int v(...);
+    public static int d(...);
+    public static int i(...);
+}
+# Keep enum names: they are stored in Firestore and sent to the AI schema.
+-keepclassmembers enum com.example.data.** { *; }
+# Crash reports stay readable without revealing source names.
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile

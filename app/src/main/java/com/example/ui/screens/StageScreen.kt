@@ -94,7 +94,6 @@ import com.example.ui.character.CharacterController
 import com.example.ui.character.CharacterRuntimeState
 import com.example.ui.character.CharacterSpec
 import com.example.ui.character.CharacterStageView
-import com.example.ui.character.InteractiveFloatingCompanionOverlay
 import com.example.ui.character.MiniCompanion3DAvatar
 import com.example.ui.theme.GlassSurface
 import com.example.ui.theme.LocalCharacterAccent
@@ -143,6 +142,8 @@ fun StageScreen(
     isListening: Boolean = false,
     livePartialTranscript: String = "",
     onMicTap: () -> Unit = {},
+    recentEntry: com.example.data.LibraryEntry? = null,
+    onOpenRecent: (com.example.data.LibraryEntry) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -174,27 +175,6 @@ fun StageScreen(
     fun triggerVoiceMic() {
         view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
         onMicTap()
-    }
-
-    if (isFloatingCompanionMode) {
-        Box(
-            modifier = modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-                .navigationBarsPadding()
-        ) {
-            InteractiveFloatingCompanionOverlay(
-                character = character,
-                controller = controller,
-                latestTurn = chatHistory.lastOrNull { !it.senderIsUser } ?: chatHistory.lastOrNull(),
-                isThinking = isThinking,
-                isListening = isListeningMic,
-                onSendMessage = onSendMessage,
-                onStartVoiceMic = { triggerVoiceMic() },
-                onExpandToFullStage = { onToggleFloatingCompanionMode(false) }
-            )
-        }
-        return
     }
 
     Box(
@@ -505,7 +485,7 @@ fun StageScreen(
 
                 // Up to 3 suggestion chips (strictly per DESIGN.md)
                 val suggestions = remember(character) {
-                    listOf("What's for dinner?", "Split last night's bill", "Message Neo") +
+                    listOf("What's for dinner?", "Split last night's bill", "Message someone") +
                         character.defaultSuggestions
                 }
                 Row(
@@ -558,7 +538,7 @@ fun StageScreen(
                         textPrimary = textPrimary,
                         onClick = {
                             onToggleConversationSheet(true)
-                            onSendMessage("Call Neo on WhatsApp")
+                            onSendMessage("I want to make a call")
                         },
                         modifier = Modifier.weight(1f)
                     )
@@ -571,7 +551,7 @@ fun StageScreen(
                         textPrimary = textPrimary,
                         onClick = {
                             onToggleConversationSheet(true)
-                            onSendMessage("Open WhatsApp chat with Neo and read the voice message")
+                            onSendMessage("I want to send a message")
                         },
                         modifier = Modifier.weight(1f)
                     )
@@ -597,14 +577,14 @@ fun StageScreen(
                     )
                 }
 
-                // Recent activity card matching Home_7dda243e.png
-                Row(
+                // Most recent real Library item (hidden when there is none).
+                if (recentEntry != null) Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(MochiShapes.card)
                         .background(surfaceRaised.copy(alpha = 0.92f))
                         .border(1.dp, hairline, MochiShapes.card)
-                        .clickable { onOpenFridgeChef() }
+                        .clickable { onOpenRecent(recentEntry) }
                         .padding(horizontal = 14.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -625,12 +605,14 @@ fun StageScreen(
                     }
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Lemon spinach pasta",
+                            text = recentEntry.title,
                             style = MochiType.Body,
-                            color = textPrimary
+                            color = textPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "Saved from your fridge photo · 2h ago",
+                            text = recentEntry.subtitle,
                             style = MochiType.Label,
                             color = textSecondary
                         )
@@ -910,7 +892,7 @@ private fun ConversationTurnItem(
 
             // Action Countdown Card matching Home - talking and acting.png
             if (hasExternalAction && !countdownCancelled) {
-                val recipientName = turn.actionRecipient.ifBlank { "Neo" }
+                val recipientName = turn.actionRecipient
                 val payloadPreview = turn.actionPayload.ifBlank { turn.message }
                 Column(
                     modifier = Modifier

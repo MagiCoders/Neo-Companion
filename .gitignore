@@ -27,3 +27,7 @@ docs/screenshots/
 public/assets/aistudio/*.zip
 public/assets/aistudio/*.html
 .aistudio/**/.tempmediaStorage/
+
+# Firebase emulator logs
+*-debug.log
+firebase-debug.log

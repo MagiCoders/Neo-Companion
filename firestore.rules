@@ -117,23 +117,51 @@ service cloud.firestore {
         && data.title is string && data.title.size() >= 1 && data.title.size() <= 150
         && data.ingredientsUsed is string && data.ingredientsUsed.size() >= 1 && data.ingredientsUsed.size() <= 500
         && data.prepTimeMinutes is int && data.prepTimeMinutes >= 1 && data.prepTimeMinutes <= 240
-        && data.calories is int && data.calories >= 50 && data.calories <= 5000
-        && data.moneySavedDollars is int && data.moneySavedDollars >= 1 && data.moneySavedDollars <= 500
+        && data.calories is int && data.calories >= 0 && data.calories <= 5000
+        && data.moneySavedDollars is int && data.moneySavedDollars >= 0 && data.moneySavedDollars <= 500
         && data.stepsSummary is string && data.stepsSummary.size() >= 1 && data.stepsSummary.size() <= 2000
         && data.isCooked is bool
         && data.createdAt is timestamp && data.createdAt <= request.time
         && data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
 
+    // Fields the app itself may never grant: Pro status and AI allowance come only from the server
+    // (Play Billing verification / daily refill via the Admin SDK, which bypasses these rules).
+    function protectedFieldsUnchanged() {
+      return request.resource.data.isProSubscriber == resource.data.isProSubscriber
+        && request.resource.data.aiCreditsMax == resource.data.aiCreditsMax
+        && request.resource.data.email == resource.data.email;
+    }
+
+    // Credits can only go down from the client; progress can only grow by a small step per write.
+    function progressChangesAreSane() {
+      let d = request.resource.data;
+      let o = resource.data;
+      return d.aiCreditsRemaining <= o.aiCreditsRemaining
+        && d.xp >= o.xp && d.xp - o.xp <= 1000
+        && d.goldCoins - o.goldCoins <= 500
+        && d.level >= o.level && d.level - o.level <= 1
+        && d.moneySavedDollars >= o.moneySavedDollars && d.moneySavedDollars - o.moneySavedDollars <= 500;
+    }
+
     match /users/{userId} {
       allow read: if isOwner(userId);
       allow create: if isOwner(userId)
         && isValidId(userId)
-        && isValidUserProfile(request.resource.data, userId);
+        && isValidUserProfile(request.resource.data, userId)
+        && request.resource.data.isProSubscriber == false
+        && request.resource.data.aiCreditsRemaining <= 15
+        && request.resource.data.aiCreditsMax == 15
+        && request.resource.data.xp == 0
+        && request.resource.data.goldCoins == 0
+        && request.resource.data.level == 1
+        && request.resource.data.email == request.auth.token.email;
       allow update: if isOwner(userId)
         && isValidUserProfile(request.resource.data, userId)
         && request.resource.data.userId == resource.data.userId
-        && request.resource.data.createdAt == resource.data.createdAt;
+        && request.resource.data.createdAt == resource.data.createdAt
+        && protectedFieldsUnchanged()
+        && progressChangesAreSane();
       allow delete: if isOwner(userId);
 
       match /quests/{questId} {

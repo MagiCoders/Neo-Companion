@@ -1,9 +1,7 @@
 package com.example.data
 
 import android.util.Log
-import com.google.firebase.auth.FirebaseAuth
-import org.json.JSONArray
-import org.json.JSONObject
+import com.google.firebase.firestore.FirebaseFirestoreException
 
 enum class OperationType {
     CREATE,
@@ -14,47 +12,21 @@ enum class OperationType {
     WRITE
 }
 
+/** A Firestore call failed. Carries the error code only — never names, emails or document contents. */
+class DataAccessException(val code: String, val operation: OperationType, cause: Throwable) :
+    RuntimeException("Firestore ${operation.name.lowercase()} failed: $code", cause)
+
+/**
+ * Logs and rethrows a Firestore failure without personal data. User IDs inside the path are
+ * masked, so logcat and crash reports can't be used to identify anyone.
+ */
 fun handleFirestoreError(
     error: Throwable,
     operationType: OperationType,
     path: String?
 ): Nothing {
-    val auth = try {
-        FirebaseAuth.getInstance()
-    } catch (_: Throwable) {
-        null
-    }
-    val user = auth?.currentUser
-
-    val providerInfoArray = JSONArray()
-    user?.providerData?.forEach { profile ->
-        providerInfoArray.put(
-            JSONObject().apply {
-                put("providerId", profile.providerId)
-                put("displayName", profile.displayName ?: JSONObject.NULL)
-                put("email", profile.email ?: JSONObject.NULL)
-                put("photoUrl", profile.photoUrl?.toString() ?: JSONObject.NULL)
-            }
-        )
-    }
-
-    val authInfo = JSONObject().apply {
-        put("userId", user?.uid ?: JSONObject.NULL)
-        put("email", user?.email ?: JSONObject.NULL)
-        put("emailVerified", user?.isEmailVerified ?: JSONObject.NULL)
-        put("isAnonymous", user?.isAnonymous ?: JSONObject.NULL)
-        put("tenantId", user?.tenantId ?: JSONObject.NULL)
-        put("providerInfo", providerInfoArray)
-    }
-
-    val errInfo = JSONObject().apply {
-        put("error", error.message ?: error.toString())
-        put("operationType", operationType.name.lowercase())
-        put("path", path ?: JSONObject.NULL)
-        put("authInfo", authInfo)
-    }
-
-    val jsonString = errInfo.toString()
-    Log.e("FirestoreError", jsonString, error)
-    throw RuntimeException(jsonString, error)
+    val code = (error as? FirebaseFirestoreException)?.code?.name ?: error.javaClass.simpleName
+    val maskedPath = path?.split('/')?.mapIndexed { i, part -> if (i % 2 == 1) "*" else part }?.joinToString("/")
+    Log.w("FirestoreError", "op=${operationType.name.lowercase()} code=$code path=$maskedPath")
+    throw DataAccessException(code, operationType, error)
 }

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Transport security:
+  - No plain HTTP anywhere (blocks downgrade / man-in-the-middle on open Wi-Fi).
+  - Only the phone's built-in certificate authorities are trusted. Certificates a user or an
+    attacker installs on the device (common in MITM proxies) are ignored in release builds.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <!-- Debug builds may additionally trust user-installed CAs for local network debugging. -->
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </debug-overrides>
+</network-security-config>
