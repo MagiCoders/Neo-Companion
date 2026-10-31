@@ -93,7 +93,7 @@ class CompanionBrain {
             withTimeout(30_000L) { model.generateContent(prompt).text }
         } catch (e: Exception) {
             Log.w(TAG, "AI request failed: ${e.javaClass.simpleName}")
-            throw AiUnavailableException("I can't reach my brain right now. Check your internet and try again.", e)
+            throw AiUnavailableException(AiDiagnostics.report(e), e)
         } ?: throw AiUnavailableException("I didn't get an answer. Please try again.")
 
         parse(raw)

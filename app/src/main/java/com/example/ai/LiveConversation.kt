@@ -116,7 +116,7 @@ class LiveConversation(
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "Live session failed: ${e.javaClass.simpleName}")
-                callbacks.onError("I couldn't start a live voice chat. Check your internet and try again.")
+                callbacks.onError(AiDiagnostics.report(e))
                 stop()
             }
         }

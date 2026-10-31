@@ -829,9 +829,11 @@ fun MochiAppHost(
                         DrivingModeScreen(
                             activeCharacter = selectedCharacter,
                             controller = viewModel.characterController,
-                            onStartVoicePrompt = { prompt ->
-                                viewModel.sendMessageToMochi(context, ttsInstance, prompt)
-                            },
+                            pendingAction = pendingVoiceAction,
+                            liveStatus = liveStatus,
+                            onTalk = { onMicTapped() },
+                            onReadMessages = { viewModel.readMessagesAloud(context, ttsInstance) },
+                            onCancelPending = viewModel::cancelPendingVoiceAction,
                             onExit = { viewModel.navigateHash(MochiHashRoutes.PROFILE) }
                         )
                     }

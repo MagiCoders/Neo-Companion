@@ -66,6 +66,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalContext
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -859,6 +860,8 @@ fun ProfileAndSettingsScreen(
         ) {
             Text("Sign out", style = MochiType.Body.copy(fontWeight = FontWeight.SemiBold), color = MochiTokens.danger)
         }
+
+        DiagnosticsCard(p)
 
         Text(
             text = "MochiLife ${com.example.BuildConfig.VERSION_NAME} (build ${com.example.BuildConfig.VERSION_CODE})",
@@ -2121,26 +2124,37 @@ fun WhenYouAreBusyScreen(
 }
 
 /**
- * Driving Mode Screen matching Driving mode.png & Driving mode - light.png.
+ * Driving mode: voice-first, huge targets, screen kept on. Everything shown is real state: a
+ * countdown appears only when an action is actually pending, and the call status comes from the
+ * live voice session.
  */
 @Composable
 fun DrivingModeScreen(
     activeCharacter: CharacterSpec,
     controller: CharacterController,
-    onStartVoicePrompt: (String) -> Unit,
+    pendingAction: com.example.ai.PendingVoiceAction?,
+    liveStatus: com.example.ai.LiveConversation.Status,
+    onTalk: () -> Unit,
+    onReadMessages: () -> Unit,
+    onCancelPending: () -> Unit,
     onExit: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val p = rememberSuiteColors()
     val isLight = LocalVisualStyle.current.isLight
     val accent = LocalCharacterAccent.current
-    var countdown by remember { mutableIntStateOf(3) }
+    val companionName = activeCharacter.displayName.substringAfter(" ")
+    val view = androidx.compose.ui.platform.LocalView.current
+    DisposableEffect(view) {
+        view.keepScreenOn = true
+        onDispose { view.keepScreenOn = false }
+    }
 
-    LaunchedEffect(Unit) {
-        while (countdown > 1) {
-            delay(1000L)
-            countdown--
-        }
+    val (headline, hint) = when {
+        pendingAction != null -> "${pendingAction.title} in ${pendingAction.remainingSeconds}" to "Say \"stop\" or tap Cancel"
+        liveStatus == com.example.ai.LiveConversation.Status.CONNECTING -> "Connecting…" to "One moment"
+        liveStatus == com.example.ai.LiveConversation.Status.LIVE -> "$companionName is listening" to "Just talk. Tap the button to hang up."
+        else -> "Hands-free" to "Say \"Hey $companionName\" or tap Talk"
     }
 
     Column(
@@ -2153,125 +2167,74 @@ fun DrivingModeScreen(
         verticalArrangement = Arrangement.SpaceBetween,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Top Bar: Car icon + "Driving mode" + "Voice only" pill on left, "Exit" button on right
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.DirectionsCar,
-                    contentDescription = null,
-                    tint = accent,
-                    modifier = Modifier.size(22.dp)
-                )
-                Text(
-                    text = "Driving mode",
-                    style = MochiType.Body.copy(fontWeight = FontWeight.SemiBold),
-                    color = p.textPrimary
-                )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Icon(Icons.Outlined.DirectionsCar, contentDescription = null, tint = accent, modifier = Modifier.size(22.dp))
+                Text("Driving mode", style = MochiType.Body.copy(fontWeight = FontWeight.SemiBold), color = p.textPrimary)
                 Box(
-                    modifier = Modifier
-                        .clip(MochiShapes.pill)
-                        .background(accent.copy(alpha = 0.16f))
-                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                    Modifier.clip(MochiShapes.pill).background(accent.copy(alpha = 0.16f)).padding(horizontal = 10.dp, vertical = 4.dp)
                 ) {
-                    Text(
-                        text = "Voice only",
-                        style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold),
-                        color = accent
-                    )
+                    Text("Voice only", style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold), color = accent)
                 }
             }
-
             Box(
-                modifier = Modifier
-                    .clip(MochiShapes.pill)
-                    .background(p.card)
-                    .border(1.dp, p.hairline, MochiShapes.pill)
-                    .clickable { onExit() }
-                    .padding(horizontal = 20.dp, vertical = 10.dp),
+                Modifier.clip(MochiShapes.pill).background(p.card).border(1.dp, p.hairline, MochiShapes.pill)
+                    .clickable { onExit() }.padding(horizontal = 20.dp, vertical = 10.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = "Exit",
-                    style = MochiType.Body.copy(fontWeight = FontWeight.Medium),
-                    color = p.textPrimary
-                )
+                Text("Exit", style = MochiType.Body.copy(fontWeight = FontWeight.Medium), color = p.textPrimary)
             }
         }
 
-        // Center Concentric Rings + 3D Avatar + "Calling Mom in 3" + 'Say "stop" to cancel'
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(MochiSpacing.md)
-        ) {
-            Box(
-                modifier = Modifier.size(260.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    drawCircle(
-                        color = accent.copy(alpha = 0.12f),
-                        radius = size.minDimension * 0.48f,
-                        style = Stroke(width = 3f)
-                    )
-                    drawCircle(
-                        color = accent.copy(alpha = 0.24f),
-                        radius = size.minDimension * 0.41f,
-                        style = Stroke(width = 3f)
-                    )
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(MochiSpacing.md)) {
+            Box(Modifier.size(240.dp), contentAlignment = Alignment.Center) {
+                val ringAlpha = if (liveStatus == com.example.ai.LiveConversation.Status.LIVE || pendingAction != null) 0.45f else 0.18f
+                Canvas(Modifier.fillMaxSize()) {
+                    drawCircle(accent.copy(alpha = ringAlpha * 0.5f), radius = size.minDimension * 0.48f, style = Stroke(width = 3f))
+                    drawCircle(accent.copy(alpha = ringAlpha), radius = size.minDimension * 0.41f, style = Stroke(width = 3f))
                 }
                 Box(
-                    modifier = Modifier
-                        .size(182.dp)
-                        .clip(CircleShape)
-                        .background(p.card)
-                        .border(2.5.dp, accent, CircleShape),
+                    Modifier.size(170.dp).clip(CircleShape).background(p.card).border(2.5.dp, accent, CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
-                    CharacterStageView(
-                        character = activeCharacter,
-                        controller = controller,
-                        halfResolutionMode = true,
-                        modifier = Modifier.fillMaxSize()
-                    )
+                    CharacterStageView(character = activeCharacter, controller = controller, halfResolutionMode = true, modifier = Modifier.fillMaxSize())
                 }
             }
-
-            Text(
-                text = "Calling Mom in $countdown",
-                style = MochiType.Display,
-                color = p.textPrimary
-            )
-            Text(
-                text = "Say \"stop\" to cancel",
-                style = MochiType.Body,
-                color = p.textSecondary
-            )
+            Text(headline, style = MochiType.Display, color = p.textPrimary, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            Text(hint, style = MochiType.Body, color = p.textSecondary, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
         }
 
-        // Giant high-contrast Cancel button at bottom
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = MochiSpacing.md)
-                .height(84.dp)
-                .clip(MochiShapes.pill)
-                .background(if (isLight) Color(0xFF17181A) else Color(0xFFF3F5F9))
-                .clickable { onExit() },
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = "Cancel",
-                style = MochiType.Title.copy(fontWeight = FontWeight.SemiBold),
-                color = if (isLight) Color(0xFFF6F3EC) else MochiTokens.onAccent
-            )
+        Column(Modifier.fillMaxWidth().padding(bottom = MochiSpacing.md), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            val strong = if (isLight) Color(0xFF17181A) else Color(0xFFF3F5F9)
+            val onStrong = if (isLight) Color(0xFFF6F3EC) else MochiTokens.onAccent
+            if (pendingAction != null) {
+                DrivingButton("Cancel", strong, onStrong, onCancelPending)
+            } else {
+                val talkLabel = if (liveStatus == com.example.ai.LiveConversation.Status.IDLE) "Talk" else "Hang up"
+                DrivingButton(talkLabel, accent, MochiTokens.onAccent, onTalk)
+                DrivingButton("Read my messages", p.card, p.textPrimary, onReadMessages, border = p.hairline)
+            }
         }
+    }
+}
+
+@Composable
+private fun DrivingButton(label: String, bg: Color, fg: Color, onClick: () -> Unit, border: Color? = null) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(80.dp)
+            .clip(MochiShapes.pill)
+            .background(bg)
+            .then(if (border != null) Modifier.border(1.dp, border, MochiShapes.pill) else Modifier)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(label, style = MochiType.Title.copy(fontWeight = FontWeight.SemiBold), color = fg)
     }
 }
 
@@ -2852,6 +2815,52 @@ private fun AppearanceSegmented(mode: Int, accent: Color, onPick: (Int) -> Unit)
             ) {
                 Text(label, style = MochiType.Label.copy(fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Medium),
                     color = if (sel) MochiTokens.textPrimary else MochiTokens.textSecondary)
+            }
+        }
+    }
+}
+
+
+/**
+ * Settings → Diagnostics: shows why the AI last failed, and (test builds only) this install's
+ * App Check debug code with the exact steps to approve it in Firebase.
+ */
+@Composable
+private fun DiagnosticsCard(p: SuitePalette) {
+    val context = LocalContext.current
+    val failure by com.example.ai.AiDiagnostics.last.collectAsState()
+    val debugSecret = remember { com.example.ai.appCheckDebugSecret(context) }
+    if (failure == null && debugSecret == null) return
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MochiShapes.card)
+            .background(p.card)
+            .border(1.dp, p.hairline, MochiShapes.card)
+            .padding(MochiSpacing.md),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text("Diagnostics", style = MochiType.Body.copy(fontWeight = FontWeight.SemiBold), color = p.textPrimary)
+        failure?.let { f ->
+            Text("Last AI problem: ${com.example.ai.AiDiagnostics.userMessage(f.reason)}", style = MochiType.Label, color = p.textSecondary)
+            Text(f.detail, style = MochiType.Label, color = p.textTertiary)
+        }
+        if (debugSecret != null) {
+            Text(
+                "Test build: before the AI works, add this App Check debug token in Firebase Console → " +
+                    "App Check → Apps → (your Android app) ⋮ → Manage debug tokens → Add debug token.",
+                style = MochiType.Label,
+                color = p.textSecondary
+            )
+            Text(debugSecret, style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold), color = p.textPrimary)
+            Box(
+                Modifier.clip(MochiShapes.pill).background(p.hairline)
+                    .clickable { clipboard.setText(androidx.compose.ui.text.AnnotatedString(debugSecret)); copied = true }
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                Text(if (copied) "Copied" else "Copy token", style = MochiType.Label, color = p.textPrimary)
             }
         }
     }

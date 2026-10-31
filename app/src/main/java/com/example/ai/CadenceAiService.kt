@@ -167,7 +167,7 @@ class CadenceAiService {
         throw e
     } catch (e: Exception) {
         Log.w(TAG, "AI request failed: ${e.javaClass.simpleName}")
-        throw AiUnavailableException("I can't reach the AI right now. Check your internet and try again.", e)
+        throw AiUnavailableException(AiDiagnostics.report(e), e)
     }
 
     private fun downscale(source: Bitmap): Bitmap {

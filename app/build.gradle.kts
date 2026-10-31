@@ -17,10 +17,13 @@ android {
     applicationId = "com.aistudio.cadence.mxkprz"
     minSdk = 24
     targetSdk = 36
-    versionCode = 2
-    versionName = "1.1"
+    versionCode = 3
+    versionName = "1.2"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    // Phones (ARM) plus x86_64 for emulators such as AI Studio's; 32-bit x86 adds ~17 MB for no real devices.
+    ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
   }
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,
@@ -110,6 +113,8 @@ dependencies {
   // Pure-Java artifacts; their declared kotlin-stdlib 2.4 would clash with this project's Kotlin.
   implementation(libs.filament.android) { exclude(group = "org.jetbrains.kotlin") }
   implementation(libs.filament.gltfio) { exclude(group = "org.jetbrains.kotlin") }
+  // Offline wake word ("Hey Mochi"): listens quietly with no recognizer restarts or beeps.
+  implementation(libs.vosk.android)
   implementation(libs.androidx.compose.ui)
   implementation(libs.androidx.compose.ui.graphics)
   implementation(libs.androidx.compose.ui.tooling.preview)

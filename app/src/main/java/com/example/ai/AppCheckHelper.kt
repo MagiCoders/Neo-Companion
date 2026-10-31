@@ -41,7 +41,14 @@ fun configureAppCheck(context: Context, intent: Intent?) {
                     .commit()
                 Log.d(TAG, "App Check debug secret configured successfully.")
             } else {
-                Log.w(TAG, "No debug token found in Intent extra.")
+                // Outside AI Studio no token is passed in. Create this install's own debug secret
+                // now (the SDK would create the same kind of random UUID) so Settings can show it
+                // for registering in Firebase Console → App Check → Manage debug tokens.
+                val persistenceKey = FirebaseApp.getInstance().persistenceKey
+                val prefs = context.getSharedPreferences("$DEBUG_STORE_PREFIX$persistenceKey", Context.MODE_PRIVATE)
+                if (prefs.getString(DEBUG_SECRET_KEY, null).isNullOrEmpty()) {
+                    prefs.edit().putString(DEBUG_SECRET_KEY, java.util.UUID.randomUUID().toString()).commit()
+                }
             }
 
             FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
@@ -71,5 +78,20 @@ fun configureAppCheck(context: Context, intent: Intent?) {
         }
     } catch (e: Exception) {
         Log.e(TAG, "Failed to initialize Firebase App Check", e)
+    }
+}
+
+/**
+ * Debug builds only: the App Check debug secret this install uses, which must be added in
+ * Firebase Console → App Check → Apps → Manage debug tokens before AI calls are accepted.
+ * Always null in release builds (they use real attestation).
+ */
+fun appCheckDebugSecret(context: Context): String? {
+    if (!BuildConfig.DEBUG) return null
+    return try {
+        val key = FirebaseApp.getInstance().persistenceKey
+        context.getSharedPreferences("$DEBUG_STORE_PREFIX$key", Context.MODE_PRIVATE).getString(DEBUG_SECRET_KEY, null)
+    } catch (_: Exception) {
+        null
     }
 }

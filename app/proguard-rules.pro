@@ -32,3 +32,9 @@
 # Crash reports stay readable without revealing source names.
 -keepattributes SourceFile,LineNumberTable
 -renamesourcefileattribute SourceFile
+
+# Vosk (offline wake word) calls its native library through JNA, which needs these names intact.
+-keep class com.sun.jna.** { *; }
+-keep class * implements com.sun.jna.** { *; }
+-keep class org.vosk.** { *; }
+-dontwarn java.awt.**

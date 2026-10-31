@@ -29,6 +29,44 @@ class CoreLogicTest {
 
     private val context: Context get() = ApplicationProvider.getApplicationContext()
 
+    // ---- Offline wake word ----------------------------------------------------------------------
+
+    private fun vosk(vararg words: Pair<String, Double>) =
+        """{"result":[${words.joinToString(",") { "{\"word\":\"${it.first}\",\"conf\":${it.second}}" }}],"text":"x"}"""
+
+    @Test
+    fun `wake phrase needs a greeting and a name, and plain talk never wakes`() {
+        val m = com.example.ai.WakePhraseMatcher
+        assertTrue(m.isWake(vosk("hey" to 1.0, "mochi" to 0.58)))
+        assertTrue(m.isWake(vosk("hi" to 1.0, "marco" to 0.7)))
+        assertFalse(m.isWake(vosk("[unk]" to 1.0)))
+        assertFalse(m.isWake(vosk("hey" to 1.0, "mochi" to 0.3)))
+        assertFalse(m.isWake(vosk("mochi" to 0.8)))          // a bare name needs very high confidence
+        assertTrue(m.isWake(vosk("mochi" to 0.97)))
+        assertFalse(m.isWake(vosk("hi" to 1.0)))
+        assertFalse(m.isWake("not json"))
+        assertTrue(m.isAbort(vosk("stop" to 0.95)))
+        assertFalse(m.isAbort(vosk("hey" to 1.0, "stop" to 0.95)))
+        assertTrue(m.grammarJson().contains("\"hey mochi\"") && m.grammarJson().endsWith("\"[unk]\"]"))
+    }
+
+    @Test
+    fun `mochi is drawn facing the camera`() {
+        assertEquals(0f, com.example.ui.character.CharacterSpec.MOCHI.modelYawDeg)
+    }
+
+    @Test
+    fun `ai failures are explained honestly`() {
+        val d = com.example.ai.AiDiagnostics
+        assertEquals(com.example.ai.AiDiagnostics.Reason.APP_CHECK, d.classify(RuntimeException("HTTP 403 App Check token is invalid")))
+        assertEquals(com.example.ai.AiDiagnostics.Reason.NETWORK, d.classify(java.io.IOException("x", java.net.UnknownHostException("host"))))
+        assertEquals(com.example.ai.AiDiagnostics.Reason.QUOTA, d.classify(RuntimeException("429 RESOURCE_EXHAUSTED")))
+        assertEquals(com.example.ai.AiDiagnostics.Reason.API_DISABLED, d.classify(RuntimeException("SERVICE_DISABLED firebasevertexai")))
+        val msg = d.report(RuntimeException("PERMISSION_DENIED"))
+        assertTrue(msg.contains("App Check"))
+        assertEquals(com.example.ai.AiDiagnostics.Reason.APP_CHECK, d.last.value?.reason)
+    }
+
     // ---- Messages bridge ----------------------------------------------------------------------
 
     private fun msg(sender: String, text: String, t: Long, app: com.example.bridge.ChatApp = com.example.bridge.ChatApp.WHATSAPP, voice: Boolean = false) =

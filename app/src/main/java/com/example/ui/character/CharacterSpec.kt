@@ -44,7 +44,7 @@ enum class CharacterSpec(
             "I need to calm down"
         ),
         isRealtime3D = true,
-        modelYawDeg = -90f // the Tripo export faces +X; turn it to face the viewer
+        modelYawDeg = 0f // the GLB already faces +Z (towards the camera); verified by rendering it from all four sides
     ),
     ELENA(
         id = "elena",

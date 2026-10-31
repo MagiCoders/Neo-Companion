@@ -282,6 +282,17 @@ class CadenceViewModel(
         executeTurnActionNow(context, tts, pending.turn)
     }
 
+    /** "Read my messages" button (driving mode): runs the real READ_MESSAGES action directly, no AI round-trip. */
+    fun readMessagesAloud(context: Context, tts: TextToSpeech?) {
+        val turn = CompanionChatTurn(
+            id = java.util.UUID.randomUUID().toString(),
+            senderIsUser = false,
+            message = "",
+            actionType = CompanionActionType.READ_MESSAGES
+        )
+        executeTurnActionNow(context, tts, turn)
+    }
+
     fun executeTurnActionNow(
         context: Context,
         tts: TextToSpeech?,
