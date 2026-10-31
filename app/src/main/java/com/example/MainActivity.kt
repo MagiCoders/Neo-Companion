@@ -848,6 +848,26 @@ fun MochiAppHost(
                 modifier = Modifier.align(Alignment.TopCenter)
             )
 
+            // Permissions an action needed: runtime ones are asked directly; notification access and
+            // the WhatsApp helper first show Google Play's prominent disclosure.
+            var accessDisclosure by remember { mutableStateOf<String?>(null) }
+            val actionPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+                androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+            ) { }
+            LaunchedEffect(Unit) {
+                viewModel.permissionRequests.collect { permission ->
+                    if (com.example.ui.screens.AccessDisclosure.isSpecialAccess(permission)) accessDisclosure = permission
+                    else if (permission.startsWith("android.permission.")) actionPermissionLauncher.launch(permission)
+                }
+            }
+            accessDisclosure?.let { kind ->
+                com.example.ui.screens.AccessDisclosureDialog(
+                    kind = kind,
+                    onAgree = { accessDisclosure = null; com.example.ui.screens.AccessDisclosure.openSettings(context, kind) },
+                    onDismiss = { accessDisclosure = null }
+                )
+            }
+
             if (showOverlayPermissionSheet) {
                 OverlayPermissionDialog(
                     companionName = selectedCharacter.displayName.substringAfter(" "),

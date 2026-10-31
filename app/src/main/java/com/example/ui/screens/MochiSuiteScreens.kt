@@ -532,7 +532,7 @@ fun ProfileAndSettingsScreen(
     var showSignOutConfirm by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val realAllowed = remember(settings) {
-        listOf("Usage access", "Physical activity", "Microphone", "Display over other apps", "Contacts", "Phone calls", "Camera", "Notifications")
+        listOf("Usage access", "Physical activity", "Microphone", "Display over other apps", "Contacts", "Phone calls", "Camera", "Notifications", AccessDisclosure.READ_MESSAGES_TITLE, AccessDisclosure.WHATSAPP_HELPER_TITLE)
             .count { SystemPermissions.isGranted(context, it) }
     }
     val busyModeLabel = when (settings.busyBehaviorIndex) {
@@ -861,7 +861,7 @@ fun ProfileAndSettingsScreen(
         }
 
         Text(
-            text = "MochiLife 1.0",
+            text = "MochiLife ${com.example.BuildConfig.VERSION_NAME} (build ${com.example.BuildConfig.VERSION_CODE})",
             style = MochiType.Label,
             color = p.textTertiary,
             modifier = Modifier.align(Alignment.CenterHorizontally)
@@ -1339,15 +1339,27 @@ fun PermissionsScreen(
             PermissionEntry(Icons.Outlined.PersonOutline, "Contacts", "To call or message people by name.", false),
             PermissionEntry(Icons.Outlined.Call, "Phone calls", "To place calls when you ask.", false),
             PermissionEntry(Icons.Outlined.CameraAlt, "Camera", "For Fridge Chef and scanning documents.", false),
-            PermissionEntry(Icons.Outlined.NotificationsNone, "Notifications", "Reminders and answers saved for later.", false)
+            PermissionEntry(Icons.Outlined.NotificationsNone, "Notifications", "Reminders and answers saved for later.", false),
+            PermissionEntry(Icons.Outlined.NotificationsNone, AccessDisclosure.READ_MESSAGES_TITLE, "Reads new chat messages aloud and sends your spoken replies.", false),
+            PermissionEntry(Icons.Outlined.Call, AccessDisclosure.WHATSAPP_HELPER_TITLE, "Presses Send, Play or Call in WhatsApp right after you ask.", false)
         )
     }
     val permissions = remember(refreshTick) {
         basePermissions.map { it.copy(allowed = SystemPermissions.isGranted(context, it.title)) }
     }
     val allowedCount = permissions.count { it.allowed }
+    var disclosureFor by remember { mutableStateOf<String?>(null) }
+    disclosureFor?.let { kind ->
+        AccessDisclosureDialog(
+            kind = kind,
+            onAgree = { disclosureFor = null; AccessDisclosure.openSettings(context, kind) },
+            onDismiss = { disclosureFor = null }
+        )
+    }
     val onTapPermission: (PermissionEntry) -> Unit = { entry ->
-        if (entry.allowed) {
+        if (AccessDisclosure.isSpecialAccess(entry.title)) {
+            if (entry.allowed) AccessDisclosure.openSettings(context, entry.title) else disclosureFor = entry.title
+        } else if (entry.allowed) {
             SystemPermissions.openAppSettings(context)
         } else {
             val runtime = SystemPermissions.runtimePermission(entry.title)
@@ -1855,7 +1867,7 @@ fun HelpAndFeedbackScreen(
             contentAlignment = Alignment.Center
         ) {
             Text(
-                text = "MochiLife 1.0",
+                text = "MochiLife ${com.example.BuildConfig.VERSION_NAME} (build ${com.example.BuildConfig.VERSION_CODE})",
                 style = MochiType.Label,
                 color = p.textTertiary
             )
@@ -2693,6 +2705,7 @@ object SystemPermissions {
         } catch (_: Throwable) { false }
         "Notifications" -> androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled()
         "Physical activity" -> if (android.os.Build.VERSION.SDK_INT < 29) true else granted(context, android.Manifest.permission.ACTIVITY_RECOGNITION)
+        AccessDisclosure.READ_MESSAGES_TITLE, AccessDisclosure.WHATSAPP_HELPER_TITLE -> AccessDisclosure.isGranted(context, title)
         else -> runtimePermission(title)?.let { granted(context, it) } ?: false
     }
 

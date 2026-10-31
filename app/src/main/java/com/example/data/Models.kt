@@ -29,7 +29,10 @@ enum class CompanionActionType(
     BROWSER_SEARCH("Browser search", "🔎", "Web Browser · search"),
     OPEN_MEDIA("Videos, sounds & music", "🎶", "Media Player · audio/video"),
     NAVIGATE_ROUTE("App navigation", "🧭", "MochiLife · screen"),
-    SPEAK_LOUD("Speaker broadcast", "🔊", "Speaker · neural voice")
+    SPEAK_LOUD("Speaker broadcast", "🔊", "Speaker · neural voice"),
+    READ_MESSAGES("Read my messages", "📥", "Notifications · read aloud"),
+    REPLY_MESSAGE("Reply to a message", "↩️", "Notifications · reply"),
+    WHATSAPP_PLAY_VOICE("Play WhatsApp voice note", "🎧", "WhatsApp · voice note")
 }
 
 object MochiHashRoutes {

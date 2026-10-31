@@ -145,6 +145,9 @@ class CompanionBrain {
             - WHATSAPP: send a WhatsApp message (actionPayload = the exact message text, in the language requested).
             - WHATSAPP_READ_CHAT: open someone's WhatsApp chat. TELEGRAM: open someone in Telegram.
             - YOUTUBE / BROWSER_SEARCH / SOCIAL_SEARCH / OPEN_MEDIA: searches and playback (actionPayload = query).
+            - READ_MESSAGES: read the user's new messages aloud (actionRecipient = a person or app to filter, or empty).
+            - REPLY_MESSAGE: reply to someone who just messaged (actionRecipient = that person, actionPayload = the reply).
+            - WHATSAPP_PLAY_VOICE: play the latest WhatsApp voice note from someone (actionRecipient = the person).
             - WHATS_PLAYING: what is playing now. NAVIGATE_ROUTE: open an app screen — one of:
               ${MochiHashRoutes.ALL.joinToString(", ")}.
             - NONE: just talk.

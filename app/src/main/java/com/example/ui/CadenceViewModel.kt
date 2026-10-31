@@ -296,7 +296,9 @@ class CadenceViewModel(
             CompanionActionType.NONE,
             CompanionActionType.SPEAK_LOUD,
             CompanionActionType.NAVIGATE_ROUTE,
-            CompanionActionType.WHATS_PLAYING
+            CompanionActionType.WHATS_PLAYING,
+            CompanionActionType.READ_MESSAGES,
+            CompanionActionType.REPLY_MESSAGE
         )
         val outcome = OmnichannelMediaBridge.autoExecuteCompanionAction(
             context = context,
@@ -324,7 +326,7 @@ class CadenceViewModel(
             spokenConfirmation = outcome.spoken,
             isActionReport = true
         )
-        if (outcome !is ActionOutcome.Done) {
+        if (outcome !is ActionOutcome.Done || outcome.speak) {
             characterController.speakWithLipSync(context, tts, outcome.spoken, _selectedCharacter.value)
         }
     }
@@ -528,6 +530,7 @@ class CadenceViewModel(
     /** Sign-out on this device: wipe personal data stored locally. */
     fun clearLocalPersonalData() {
         secure.clear()
+        com.example.bridge.MessageInbox.clear()
         _chatHistory.value = emptyList()
         _settings.value = _settings.value.copy(userName = "", userNickname = "", userAboutBio = "")
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -846,7 +849,8 @@ class CadenceViewModel(
 
                 when (aiTurn.actionType) {
                     CompanionActionType.NONE, CompanionActionType.SPEAK_LOUD -> Unit
-                    CompanionActionType.NAVIGATE_ROUTE, CompanionActionType.WHATS_PLAYING ->
+                    CompanionActionType.NAVIGATE_ROUTE, CompanionActionType.WHATS_PLAYING,
+                    CompanionActionType.READ_MESSAGES ->
                         executeTurnActionNow(context, tts, aiTurn)
                     else -> {
                         val ready = (preparation as Preparation.Ready).action

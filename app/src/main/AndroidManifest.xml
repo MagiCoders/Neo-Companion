@@ -91,6 +91,31 @@
                 android:value="Interactive 3D AI companion floating overlay on user screen" />
         </service>
 
+        <!-- Reads incoming chat notifications so the companion can read them aloud and reply. -->
+        <service
+            android:name=".bridge.MessageListenerService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- Optional WhatsApp helper (fixed, user-triggered steps only). -->
+        <service
+            android:name=".actions.WhatsAppHelper"
+            android:exported="true"
+            android:label="@string/whatsapp_helper_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/whatsapp_helper" />
+        </service>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

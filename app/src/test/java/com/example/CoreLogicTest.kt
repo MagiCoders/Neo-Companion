@@ -29,6 +29,42 @@ class CoreLogicTest {
 
     private val context: Context get() = ApplicationProvider.getApplicationContext()
 
+    // ---- Messages bridge ----------------------------------------------------------------------
+
+    private fun msg(sender: String, text: String, t: Long, app: com.example.bridge.ChatApp = com.example.bridge.ChatApp.WHATSAPP, voice: Boolean = false) =
+        com.example.bridge.IncomingMessage("k$t", app, sender, text, t, voice, false, null)
+
+    @Test
+    fun `inbox filters by person or app and summarises voice notes`() {
+        val inbox = com.example.bridge.MessageInbox
+        inbox.clear()
+        inbox.add(listOf(msg("Mom", "Call me", 1_000), msg("Sam", "🎤 Voice message", 2_000, voice = true),
+            msg("Lee", "Hi", 3_000, com.example.bridge.ChatApp.TELEGRAM)))
+        assertEquals(1, inbox.find("mom", onlyUnread = true).size)
+        assertEquals(listOf("Lee"), inbox.find("Telegram", onlyUnread = true).map { it.sender })
+        assertEquals(3, inbox.find("", onlyUnread = true).size)
+        val spoken = inbox.summarise(inbox.find("", onlyUnread = true))
+        assertTrue(spoken.startsWith("3 new messages."))
+        assertTrue(spoken.contains("Sam on WhatsApp: a voice note"))
+        // No reply action from the app → nothing to reply through.
+        assertNull(inbox.latestFrom("Mom"))
+        inbox.add(listOf(msg("Mom", "Call me", 1_000)))
+        assertEquals(3, inbox.messages.value.size) // duplicates from re-posted notifications are dropped
+        inbox.markRead()
+        assertTrue(inbox.unread().isEmpty())
+        inbox.clear()
+    }
+
+    @Test
+    fun `reading messages without notification access asks for it`() {
+        val turn = CompanionChatTurn(id = "t9", senderIsUser = false, message = "", actionType = CompanionActionType.READ_MESSAGES)
+        val prep = ActionExecutor(context).prepare(turn)
+        assertTrue(prep is Preparation.Blocked)
+        val outcome = (prep as Preparation.Blocked).outcome
+        assertTrue(outcome is ActionOutcome.NeedsPermission)
+        assertEquals(ActionExecutor.NOTIFICATION_ACCESS, (outcome as ActionOutcome.NeedsPermission).permission)
+    }
+
     // ---- Phone numbers & contacts ------------------------------------------------------------
 
     @Test

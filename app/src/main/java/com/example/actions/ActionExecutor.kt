@@ -17,7 +17,8 @@ import com.example.data.CompanionChatTurn
 sealed interface ActionOutcome {
     val spoken: String
 
-    data class Done(override val spoken: String) : ActionOutcome
+    /** @param speak true when the result itself is the answer (e.g. messages read aloud). */
+    data class Done(override val spoken: String, val speak: Boolean = false) : ActionOutcome
     data class NeedsContactChoice(val query: String, val candidates: List<PhoneContact>) : ActionOutcome {
         override val spoken: String =
             "I found ${candidates.size} contacts for \"$query\": " +
@@ -31,7 +32,9 @@ sealed interface ActionOutcome {
 data class PreparedAction(
     val turn: CompanionChatTurn,
     val contact: PhoneContact? = null,
-    val number: String? = null
+    val number: String? = null,
+    /** For replies: the message being answered (its app's own reply action is used). */
+    val incoming: com.example.bridge.IncomingMessage? = null
 ) {
     /** What the countdown card shows, e.g. "Call Mom · +44 7700 900123". */
     val title: String
@@ -47,6 +50,8 @@ data class PreparedAction(
                 CompanionActionType.BROWSER_SEARCH -> "Search · ${turn.actionPayload}"
                 CompanionActionType.SOCIAL_SEARCH -> "${turn.actionRecipient.ifBlank { "News" }} · ${turn.actionPayload}"
                 CompanionActionType.OPEN_MEDIA -> "Play · ${turn.actionPayload}"
+                CompanionActionType.REPLY_MESSAGE -> "Reply to ${incoming?.sender ?: turn.actionRecipient} · ${incoming?.app?.label ?: ""}"
+                CompanionActionType.WHATSAPP_PLAY_VOICE -> "Play voice note · $who"
                 else -> turn.actionType.label
             }
         }
@@ -67,6 +72,26 @@ class ActionExecutor(private val context: Context) {
     private val contacts = ContactResolver(context)
 
     fun prepare(turn: CompanionChatTurn): Preparation {
+        when (turn.actionType) {
+            CompanionActionType.READ_MESSAGES -> return if (com.example.bridge.MessageInbox.hasAccess(context)) {
+                Preparation.Ready(PreparedAction(turn))
+            } else {
+                Preparation.Blocked(ActionOutcome.NeedsPermission(NOTIFICATION_ACCESS, "To read your messages, turn on notification access for MochiLife on the next screen."))
+            }
+            CompanionActionType.REPLY_MESSAGE -> {
+                if (!com.example.bridge.MessageInbox.hasAccess(context)) {
+                    return Preparation.Blocked(ActionOutcome.NeedsPermission(NOTIFICATION_ACCESS, "To reply for you, turn on notification access for MochiLife on the next screen."))
+                }
+                if (turn.actionPayload.isBlank()) return Preparation.Blocked(ActionOutcome.Failed("What should I reply?"))
+                val msg = com.example.bridge.MessageInbox.latestFrom(turn.actionRecipient)
+                    ?: return Preparation.Blocked(ActionOutcome.Failed("I don't see a recent message from ${turn.actionRecipient} that I can reply to. I can open WhatsApp with your message instead — just ask me to message them."))
+                return Preparation.Ready(PreparedAction(turn, incoming = msg))
+            }
+            CompanionActionType.WHATSAPP_PLAY_VOICE -> if (!WhatsAppHelper.isEnabled(context)) {
+                return Preparation.Blocked(ActionOutcome.NeedsPermission(ACCESSIBILITY, "To play WhatsApp voice notes, turn on the MochiLife WhatsApp helper on the next screen."))
+            }
+            else -> Unit
+        }
         val needsPerson = turn.actionType in PERSON_ACTIONS
         if (!needsPerson) {
             return if (turn.actionType in QUERY_ACTIONS && turn.actionPayload.isBlank()) {
@@ -108,6 +133,9 @@ class ActionExecutor(private val context: Context) {
             CompanionActionType.SOCIAL_SEARCH -> socialSearch(turn.actionRecipient, turn.actionPayload)
             CompanionActionType.OPEN_MEDIA -> playMedia(turn.actionPayload)
             CompanionActionType.WHATS_PLAYING -> whatsPlaying()
+            CompanionActionType.READ_MESSAGES -> readMessages(turn.actionRecipient)
+            CompanionActionType.REPLY_MESSAGE -> replyToMessage(action)
+            CompanionActionType.WHATSAPP_PLAY_VOICE -> playWhatsAppVoice(action)
             CompanionActionType.NAVIGATE_ROUTE,
             CompanionActionType.SPEAK_LOUD,
             CompanionActionType.NONE -> ActionOutcome.Done("")
@@ -139,9 +167,12 @@ class ActionExecutor(private val context: Context) {
         }
         // No WhatsApp call entry for this contact: open the chat so one tap starts the call.
         val number = action.number ?: return ActionOutcome.Failed("${who(action)} has no phone number.")
+        val helper = WhatsAppHelper.isEnabled(context)
+        if (helper) WhatsAppHelper.request(WhatsAppHelper.Task.VoiceCall)
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/${PhoneNumbers.forWhatsApp(number)}")).setPackage(WHATSAPP)
         return launch(intent, "I couldn't open WhatsApp.") {
-            "I opened ${who(action)}'s chat — tap the call button. (Their WhatsApp call shortcut isn't in your contacts yet.)"
+            if (helper) "Calling ${who(action)} on WhatsApp."
+            else "I opened ${who(action)}'s chat — tap the call button."
         }
     }
 
@@ -156,8 +187,14 @@ class ActionExecutor(private val context: Context) {
         val number = action.number ?: return ActionOutcome.Failed("${who(action)} has no phone number.")
         val text = action.turn.actionPayload.trim()
         val uri = Uri.parse("https://wa.me/${PhoneNumbers.forWhatsApp(number)}" + if (text.isNotEmpty()) "?text=${Uri.encode(text)}" else "")
+        val autoSend = text.isNotEmpty() && WhatsAppHelper.isEnabled(context)
+        if (autoSend) WhatsAppHelper.request(WhatsAppHelper.Task.SendPrefilled)
         return launch(Intent(Intent.ACTION_VIEW, uri).setPackage(pkg), "I couldn't open WhatsApp.") {
-            if (text.isNotEmpty()) "Your message to ${who(action)} is ready in WhatsApp." else "Opened ${who(action)}'s chat."
+            when {
+                autoSend -> "Sending your message to ${who(action)} on WhatsApp."
+                text.isNotEmpty() -> "Your message to ${who(action)} is ready in WhatsApp — tap Send."
+                else -> "Opened ${who(action)}'s chat."
+            }
         }
     }
 
@@ -228,6 +265,32 @@ class ActionExecutor(private val context: Context) {
         }
     }
 
+    private fun readMessages(filter: String): ActionOutcome {
+        val list = com.example.bridge.MessageInbox.find(filter, onlyUnread = true)
+            .ifEmpty { com.example.bridge.MessageInbox.find(filter, onlyUnread = false).takeLast(3) }
+        com.example.bridge.MessageInbox.markRead()
+        if (list.isEmpty()) return ActionOutcome.Done("No new messages${if (filter.isNotBlank()) " from $filter" else ""}.", speak = true)
+        val voice = list.lastOrNull { it.isVoiceNote }
+        val tail = if (voice != null) " ${voice.sender} sent a voice note — say \"play it\" and I'll play it in WhatsApp." else ""
+        return ActionOutcome.Done(com.example.bridge.MessageInbox.summarise(list) + tail, speak = true)
+    }
+
+    private fun replyToMessage(action: PreparedAction): ActionOutcome {
+        val msg = action.incoming ?: return ActionOutcome.Failed("That message can't be replied to any more.")
+        return if (com.example.bridge.MessageInbox.reply(context, msg, action.turn.actionPayload.trim())) {
+            ActionOutcome.Done("Sent your reply to ${msg.sender} on ${msg.app.label}.", speak = true)
+        } else {
+            ActionOutcome.Failed("${msg.app.label} didn't accept the reply. Open the chat and I'll help from there.")
+        }
+    }
+
+    private fun playWhatsAppVoice(action: PreparedAction): ActionOutcome {
+        val number = action.number ?: return ActionOutcome.Failed("${who(action)} has no phone number.")
+        WhatsAppHelper.request(WhatsAppHelper.Task.PlayLatestVoiceNote)
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/${PhoneNumbers.forWhatsApp(number)}")).setPackage(WHATSAPP)
+        return launch(intent, "I couldn't open WhatsApp.") { "Opening ${who(action)}'s chat and playing the latest voice note." }
+    }
+
     private fun openApp(pkg: String, label: String): ActionOutcome {
         val intent = context.packageManager.getLaunchIntentForPackage(pkg)
             ?: return ActionOutcome.Failed("$label isn't installed on this phone.")
@@ -257,6 +320,9 @@ class ActionExecutor(private val context: Context) {
         s.startsWith("https://") || s.startsWith("http://") || Regex("^[\\w-]+(\\.[\\w-]+)+(/\\S*)?$").matches(s)
 
     companion object {
+        /** Pseudo-permissions the UI handles by opening the matching system settings screen. */
+        const val NOTIFICATION_ACCESS = "mochi.notification_access"
+        const val ACCESSIBILITY = "mochi.accessibility"
         const val WHATSAPP = "com.whatsapp"
         const val WHATSAPP_BUSINESS = "com.whatsapp.w4b"
         const val TELEGRAM = "org.telegram.messenger"
@@ -267,7 +333,8 @@ class ActionExecutor(private val context: Context) {
             CompanionActionType.SOCIAL_CALL,
             CompanionActionType.WHATSAPP,
             CompanionActionType.WHATSAPP_READ_CHAT,
-            CompanionActionType.TELEGRAM
+            CompanionActionType.TELEGRAM,
+            CompanionActionType.WHATSAPP_PLAY_VOICE
         )
         val QUERY_ACTIONS = setOf(
             CompanionActionType.YOUTUBE,
