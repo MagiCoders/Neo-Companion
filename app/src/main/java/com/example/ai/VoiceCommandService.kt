@@ -23,6 +23,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -73,23 +74,75 @@ class VoiceCommandService(
     companion object {
         private const val TAG = "VoiceCommandService"
         private val WAKE_WORD_REGEX = Regex(
-            "(?i)\\b(hi|hey|hello|okay|ok)\\s+(mochi|elena|kaito|marco)\\b[,\\s]*"
+            "(?i)\\b(hi|hey|hello|okay|ok)\\s+(mochi|elena|kaito|marco)\\b[,.!?\\s]*"
         )
         private val ABORT_COMMAND_REGEX = Regex(
-            "(?i)^(stop|cancel|undo|abort|wait|don't|do not|never mind|nevermind)$"
+            "(?i)^(stop|cancel|undo|abort|wait|don't|do not|never mind|nevermind)[.!]?$"
         )
+
+        /** Pause between two passive wake-word sessions (silence → restart). */
+        private const val WAKE_RESTART_MS = 1_500L
+        /** After a hard error the wait doubles each time, up to this cap. */
+        private const val MAX_BACKOFF_MS = 30_000L
+        /** After this many hard errors in a row the wake loop stops until something changes. */
+        private const val MAX_HARD_ERRORS = 6
+        /** Safety net: stop waiting for a reply after this long. */
+        private const val AWAIT_REPLY_TIMEOUT_MS = 20_000L
+
+        @Volatile
+        private var INSTANCE: VoiceCommandService? = null
+
+        /**
+         * One voice engine per process. The app UI and the floating overlay share it so only one
+         * SpeechRecognizer ever owns the microphone (several recognizers fighting over the mic was
+         * the cause of the "opening and closing" loop).
+         */
+        fun shared(context: Context): VoiceCommandService =
+            INSTANCE ?: synchronized(this) {
+                INSTANCE ?: VoiceCommandService(
+                    context.applicationContext,
+                    CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+                ).also { INSTANCE = it }
+            }
+
+        /** Called by anything that makes the companion talk, so the mic never hears it. */
+        fun notifyAssistantSpeaking(speaking: Boolean) {
+            INSTANCE?.setAssistantSpeaking(speaking)
+        }
     }
+
+    private enum class SessionKind { WAKE, COMMAND }
+
+    private class CallbackSet(
+        val onCommand: (String) -> Unit,
+        val onExecutePending: (PendingVoiceAction) -> Unit
+    )
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var speechRecognizer: SpeechRecognizer? = null
     private var countdownJob: Job? = null
     private var restartListeningJob: Job? = null
+    private var awaitReplyJob: Job? = null
 
-    private val _isWakeWordEnabled = MutableStateFlow(true)
+    // ---- Mic arbitration state (main thread only) ----
+    private var hasRecordPermission = false
+    private val hosts = linkedSetOf<String>()
+    private var assistantSpeaking = false
+    private var awaitingReply = false
+    private var sessionKind: SessionKind? = null
+    private var hardErrorCount = 0
+    private var wakeLoopSuspended = false
+
+    private val _isWakeWordEnabled = MutableStateFlow(false)
     val isWakeWordEnabled: StateFlow<Boolean> = _isWakeWordEnabled.asStateFlow()
 
+    /** True only while a tap-to-talk (command) session is listening — drives the "Listening…" UI. */
     private val _isActivelyListening = MutableStateFlow(false)
     val isActivelyListening: StateFlow<Boolean> = _isActivelyListening.asStateFlow()
+
+    /** True while the passive "Hey Elena" loop is running quietly in the background. */
+    private val _isWakeLoopRunning = MutableStateFlow(false)
+    val isWakeLoopRunning: StateFlow<Boolean> = _isWakeLoopRunning.asStateFlow()
 
     private val _wakeWordArmed = MutableStateFlow(false)
     val wakeWordArmed: StateFlow<Boolean> = _wakeWordArmed.asStateFlow()
@@ -106,8 +159,15 @@ class VoiceCommandService(
     private val _lastError = MutableStateFlow<String?>(null)
     val lastError: StateFlow<String?> = _lastError.asStateFlow()
 
-    private var onCommandRecognizedCallback: ((String) -> Unit)? = null
-    private var onExecutePendingActionCallback: ((PendingVoiceAction) -> Unit)? = null
+    /** Last bound owner wins (the overlay sits on top of the app while it is showing). */
+    private val callbackStack = ArrayList<Pair<String, CallbackSet>>()
+    private var pendingExecuteOverride: ((PendingVoiceAction) -> Unit)? = null
+
+    private val onCommandRecognizedCallback: ((String) -> Unit)?
+        get() = callbackStack.lastOrNull()?.second?.onCommand
+
+    private val onExecutePendingActionCallback: ((PendingVoiceAction) -> Unit)?
+        get() = pendingExecuteOverride ?: callbackStack.lastOrNull()?.second?.onExecutePending
 
     private val nlpSchema = Schema.obj(
         properties = mapOf(
@@ -149,17 +209,32 @@ class VoiceCommandService(
         )
     }
 
+    // ------------------------------------------------------------------------------------------
+    // Callback binding
+    // ------------------------------------------------------------------------------------------
+
     fun bindCallbacks(
         onCommandRecognized: (String) -> Unit,
         onExecutePendingAction: (PendingVoiceAction) -> Unit
+    ) = bindCallbacks("app", onCommandRecognized, onExecutePendingAction)
+
+    fun bindCallbacks(
+        owner: String,
+        onCommandRecognized: (String) -> Unit,
+        onExecutePendingAction: (PendingVoiceAction) -> Unit
     ) {
-        onCommandRecognizedCallback = onCommandRecognized
-        onExecutePendingActionCallback = onExecutePendingAction
+        runOnMain {
+            callbackStack.removeAll { it.first == owner }
+            callbackStack.add(owner to CallbackSet(onCommandRecognized, onExecutePendingAction))
+        }
+    }
+
+    fun unbindCallbacks(owner: String) {
+        runOnMain { callbackStack.removeAll { it.first == owner } }
     }
 
     /**
-     * Strips wake-word prefixes ("Hi Mochi", "Hey Mochi", "Hi Elena", "Hey Marco", "Hi Kaito")
-     * from spoken input and returns the clean natural language command.
+     * Strips wake-word prefixes ("Hi Mochi", "Hey Elena", …) and returns the clean command.
      */
     fun extractWakeWordOrCommand(rawSpoken: String, companion: CharacterSpec): String {
         val cleaned = rawSpoken.replace(WAKE_WORD_REGEX, "").trim()
@@ -168,115 +243,320 @@ class VoiceCommandService(
         }
     }
 
+    // ------------------------------------------------------------------------------------------
+    // Public controls
+    // ------------------------------------------------------------------------------------------
+
     fun setWakeWordEnabled(enabled: Boolean) {
-        _isWakeWordEnabled.value = enabled
-        if (!enabled) {
-            stopListening()
-        }
-    }
-
-    /**
-     * Enables or disables global persistent `'Hi Mochi'` wake-word listening.
-     */
-    fun setWakeWordListeningEnabled(enabled: Boolean, hasRecordPermission: Boolean) {
-        _isWakeWordEnabled.value = enabled
-        if (enabled && hasRecordPermission) {
-            startPersistentListeningLoop()
-        } else if (!enabled) {
-            stopListening()
-        }
-    }
-
-    /**
-     * Triggers an immediate manual or wake-word voice listening session on the main thread.
-     */
-    fun triggerManualMicSession(hasRecordPermission: Boolean) {
-        if (!hasRecordPermission) return
-        _wakeWordArmed.value = true
-        startPersistentListeningLoop(forceImmediateCommandCapture = true)
-    }
-
-    fun startPersistentListeningLoop(forceImmediateCommandCapture: Boolean = false) {
-        mainHandler.post {
-            try {
-                if (!SpeechRecognizer.isRecognitionAvailable(appContext)) {
-                    Log.w(TAG, "SpeechRecognizer not available on this device.")
-                    return@post
-                }
-                if (speechRecognizer == null) {
-                    speechRecognizer = SpeechRecognizer.createSpeechRecognizer(appContext).apply {
-                        setRecognitionListener(createRecognitionListener())
-                    }
-                }
-                if (forceImmediateCommandCapture) {
-                    _wakeWordArmed.value = true
-                }
-                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                    putExtra(
-                        RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                        RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-                    )
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
-                    putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                    putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-                }
-                speechRecognizer?.startListening(intent)
-                _isActivelyListening.value = true
-            } catch (e: Exception) {
-                Log.w(TAG, "Could not start SpeechRecognizer: ${e.message}")
-                _isActivelyListening.value = false
-                scheduleListeningRestart(1500L)
+        runOnMain {
+            if (_isWakeWordEnabled.value != enabled) {
+                _isWakeWordEnabled.value = enabled
+                wakeLoopSuspended = false
+                hardErrorCount = 0
             }
+            reevaluate()
+        }
+    }
+
+    /** Enables or disables the passive "Hey Elena" wake-word loop. */
+    fun setWakeWordListeningEnabled(enabled: Boolean, hasRecordPermission: Boolean) {
+        runOnMain {
+            this.hasRecordPermission = hasRecordPermission
+            if (_isWakeWordEnabled.value != enabled) {
+                _isWakeWordEnabled.value = enabled
+                wakeLoopSuspended = false
+                hardErrorCount = 0
+            }
+            reevaluate()
+        }
+    }
+
+    fun updateRecordPermission(granted: Boolean) {
+        runOnMain {
+            if (hasRecordPermission != granted) {
+                hasRecordPermission = granted
+                wakeLoopSuspended = false
+                hardErrorCount = 0
+            }
+            reevaluate()
+        }
+    }
+
+    /**
+     * A "host" is something that is allowed to use the mic right now: the visible app
+     * (foreground) or the floating overlay (foreground service with microphone type).
+     * With no host, the mic is released — Android blocks background mic access anyway and
+     * retrying it was part of the restart storm.
+     */
+    fun acquireHost(tag: String) {
+        runOnMain {
+            if (hosts.add(tag)) {
+                wakeLoopSuspended = false
+                hardErrorCount = 0
+            }
+            reevaluate()
+        }
+    }
+
+    fun releaseHost(tag: String) {
+        runOnMain {
+            hosts.remove(tag)
+            if (hosts.isEmpty()) {
+                cancelSession(destroy = true)
+            }
+            reevaluate()
+        }
+    }
+
+    /** Tap-to-talk. Tapping again while listening stops it. */
+    fun triggerManualMicSession(hasRecordPermission: Boolean) {
+        runOnMain {
+            this.hasRecordPermission = hasRecordPermission
+            if (!hasRecordPermission) return@runOnMain
+            if (sessionKind == SessionKind.COMMAND) {
+                cancelSession(destroy = false)
+                reevaluate(delayMs = WAKE_RESTART_MS)
+                return@runOnMain
+            }
+            wakeLoopSuspended = false
+            hardErrorCount = 0
+            awaitingReply = false
+            startSession(SessionKind.COMMAND)
+        }
+    }
+
+    /** Kept for older call sites: starts a command session when forced, otherwise re-checks the wake loop. */
+    fun startPersistentListeningLoop(forceImmediateCommandCapture: Boolean = false) {
+        runOnMain {
+            if (forceImmediateCommandCapture) startSession(SessionKind.COMMAND) else reevaluate()
         }
     }
 
     fun stopListening() {
-        restartListeningJob?.cancel()
-        mainHandler.post {
-            try {
-                speechRecognizer?.stopListening()
-                speechRecognizer?.cancel()
-            } catch (_: Throwable) {
-            }
-            _isActivelyListening.value = false
-            _wakeWordArmed.value = false
-            _livePartialTranscript.value = ""
+        runOnMain {
+            restartListeningJob?.cancel()
+            cancelSession(destroy = false)
         }
     }
 
-    private fun scheduleListeningRestart(delayMs: Long = 900L) {
-        restartListeningJob?.cancel()
-        if (!_isWakeWordEnabled.value) return
-        restartListeningJob = scope.launch(Dispatchers.Main) {
-            delay(delayMs)
-            if (_isWakeWordEnabled.value && !_isActivelyListening.value) {
-                startPersistentListeningLoop(forceImmediateCommandCapture = false)
+    /** The app finished handling the last command (reply shown, speech queued or skipped). */
+    fun clearAwaitingReply() {
+        runOnMain {
+            awaitReplyJob?.cancel()
+            if (awaitingReply) {
+                awaitingReply = false
+                reevaluate(delayMs = 700L)
             }
         }
+    }
+
+    fun setAssistantSpeaking(speaking: Boolean) {
+        runOnMain {
+            if (assistantSpeaking == speaking) return@runOnMain
+            assistantSpeaking = speaking
+            if (speaking) {
+                awaitingReply = false
+                awaitReplyJob?.cancel()
+                restartListeningJob?.cancel()
+                cancelSession(destroy = false)
+            } else {
+                // Give the speaker a moment to go quiet before the mic opens again.
+                reevaluate(delayMs = 700L)
+            }
+        }
+    }
+
+    /**
+     * Watches a TextToSpeech engine and reports when it falls silent. Use after any tts.speak()
+     * that is not already wrapped by CharacterController.speakWithLipSync.
+     */
+    fun watchTtsUntilSilent(tts: TextToSpeech?) {
+        if (tts == null) return
+        setAssistantSpeaking(true)
+        val startedAt = System.currentTimeMillis()
+        val poll = object : Runnable {
+            override fun run() {
+                val elapsed = System.currentTimeMillis() - startedAt
+                val speaking = try { tts.isSpeaking } catch (_: Throwable) { false }
+                if ((speaking || elapsed < 400L) && elapsed < 60_000L) {
+                    mainHandler.postDelayed(this, 200L)
+                } else {
+                    setAssistantSpeaking(false)
+                }
+            }
+        }
+        mainHandler.postDelayed(poll, 200L)
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Session engine (main thread)
+    // ------------------------------------------------------------------------------------------
+
+    private fun runOnMain(block: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) block() else mainHandler.post(block)
+    }
+
+    private fun canUseMic(): Boolean =
+        hosts.isNotEmpty() && hasRecordPermission && !assistantSpeaking
+
+    /** Decides whether the passive wake loop should be running, and (re)starts it if so. */
+    private fun reevaluate(delayMs: Long = 0L) {
+        restartListeningJob?.cancel()
+        if (!canUseMic()) {
+            if (sessionKind != null) cancelSession(destroy = hosts.isEmpty())
+            return
+        }
+        if (sessionKind != null) return
+        if (!_isWakeWordEnabled.value || wakeLoopSuspended || awaitingReply) return
+        if (delayMs <= 0L) {
+            startSession(SessionKind.WAKE)
+        } else {
+            restartListeningJob = scope.launch(Dispatchers.Main) {
+                delay(delayMs)
+                if (canUseMic() && sessionKind == null && _isWakeWordEnabled.value &&
+                    !wakeLoopSuspended && !awaitingReply
+                ) {
+                    startSession(SessionKind.WAKE)
+                }
+            }
+        }
+    }
+
+    private fun startSession(kind: SessionKind) {
+        if (!SpeechRecognizer.isRecognitionAvailable(appContext)) {
+            _lastError.value = "Speech recognition isn't available on this device."
+            return
+        }
+        if (!hasRecordPermission) return
+        if (kind == SessionKind.WAKE && !canUseMic()) return
+        if (kind == SessionKind.COMMAND && (hosts.isEmpty() || assistantSpeaking)) {
+            if (assistantSpeaking) {
+                // Tapping the mic while she talks means "let me speak": stop her and listen.
+                assistantSpeaking = false
+            } else {
+                return
+            }
+        }
+        restartListeningJob?.cancel()
+        if (sessionKind != null) cancelSession(destroy = false)
+        try {
+            val recognizer = speechRecognizer ?: SpeechRecognizer.createSpeechRecognizer(appContext).also {
+                it.setRecognitionListener(createRecognitionListener())
+                speechRecognizer = it
+            }
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
+                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+                putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, appContext.packageName)
+                if (kind == SessionKind.WAKE) {
+                    putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+                }
+            }
+            sessionKind = kind
+            _wakeWordArmed.value = kind == SessionKind.COMMAND
+            _isActivelyListening.value = kind == SessionKind.COMMAND
+            _isWakeLoopRunning.value = kind == SessionKind.WAKE
+            if (kind == SessionKind.COMMAND) _livePartialTranscript.value = ""
+            recognizer.startListening(intent)
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not start SpeechRecognizer: ${e.message}")
+            onHardError("start failed: ${e.message}", destroy = true)
+        }
+    }
+
+    private fun cancelSession(destroy: Boolean) {
+        val hadSession = sessionKind != null
+        sessionKind = null
+        _isActivelyListening.value = false
+        _isWakeLoopRunning.value = false
+        _wakeWordArmed.value = false
+        _livePartialTranscript.value = ""
+        _micRmsDb.value = 0f
+        try {
+            if (hadSession) speechRecognizer?.cancel()
+            if (destroy) {
+                speechRecognizer?.destroy()
+                speechRecognizer = null
+            }
+        } catch (_: Throwable) {
+            speechRecognizer = null
+        }
+    }
+
+    private fun onSessionEnded() {
+        sessionKind = null
+        _isActivelyListening.value = false
+        _isWakeLoopRunning.value = false
+        _wakeWordArmed.value = false
+        _micRmsDb.value = 0f
+    }
+
+    private fun onHardError(reason: String, destroy: Boolean) {
+        onSessionEnded()
+        if (destroy) {
+            try { speechRecognizer?.destroy() } catch (_: Throwable) {}
+            speechRecognizer = null
+        }
+        hardErrorCount++
+        Log.w(TAG, "Speech error #$hardErrorCount: $reason")
+        if (hardErrorCount >= MAX_HARD_ERRORS) {
+            wakeLoopSuspended = true
+            _lastError.value = "Voice paused — the speech service kept failing. Tap the mic to try again."
+            return
+        }
+        val backoff = (1_000L shl (hardErrorCount - 1).coerceAtMost(5)).coerceAtMost(MAX_BACKOFF_MS)
+        reevaluate(delayMs = backoff)
+    }
+
+    private fun deliverCommand(command: String) {
+        val callback = onCommandRecognizedCallback ?: return
+        // Hold the wake loop until she has answered (or a timeout passes).
+        awaitingReply = true
+        awaitReplyJob?.cancel()
+        awaitReplyJob = scope.launch(Dispatchers.Main) {
+            delay(AWAIT_REPLY_TIMEOUT_MS)
+            awaitingReply = false
+            reevaluate()
+        }
+        callback(command)
     }
 
     private fun createRecognitionListener(): RecognitionListener = object : RecognitionListener {
-        override fun onReadyForSpeech(params: Bundle?) {
-            _isActivelyListening.value = true
-        }
+        override fun onReadyForSpeech(params: Bundle?) {}
 
         override fun onBeginningOfSpeech() {}
 
         override fun onRmsChanged(rmsdB: Float) {
-            _micRmsDb.value = rmsdB
+            if (sessionKind == SessionKind.COMMAND) _micRmsDb.value = rmsdB
         }
 
         override fun onBufferReceived(buffer: ByteArray?) {}
 
-        override fun onEndOfSpeech() {
-            _isActivelyListening.value = false
-        }
+        override fun onEndOfSpeech() {}
 
         override fun onError(error: Int) {
-            _isActivelyListening.value = false
-            // Automatically keep the global 'Hi Mochi' wake-word loop alive
-            if (_isWakeWordEnabled.value) {
-                scheduleListeningRestart(1100L)
+            val kind = sessionKind
+            when (error) {
+                SpeechRecognizer.ERROR_NO_MATCH,
+                SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
+                    // Plain silence — completely normal, not a failure.
+                    onSessionEnded()
+                    hardErrorCount = 0
+                    if (kind == SessionKind.COMMAND) {
+                        _livePartialTranscript.value = ""
+                    }
+                    reevaluate(delayMs = WAKE_RESTART_MS)
+                }
+                SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> {
+                    onSessionEnded()
+                    hasRecordPermission = false
+                    _lastError.value = "Microphone permission is off."
+                }
+                SpeechRecognizer.ERROR_RECOGNIZER_BUSY,
+                SpeechRecognizer.ERROR_CLIENT -> onHardError("busy/client ($error)", destroy = true)
+                else -> onHardError("error $error", destroy = false)
             }
         }
 
@@ -286,21 +566,28 @@ class VoiceCommandService(
                 ?.firstOrNull()
                 ?.trim()
                 .orEmpty()
-            if (partial.isNotEmpty()) {
-                _livePartialTranscript.value = partial
-                // Check if user said "stop", "cancel", or "undo" during an active 3s countdown
-                if (_pendingAction.value != null && ABORT_COMMAND_REGEX.matches(partial)) {
-                    cancelPendingAction()
-                    return
-                }
-                if (WAKE_WORD_REGEX.containsMatchIn(partial)) {
+            if (partial.isEmpty()) return
+            if (_pendingAction.value != null && ABORT_COMMAND_REGEX.matches(partial)) {
+                cancelPendingAction()
+                return
+            }
+            when (sessionKind) {
+                SessionKind.COMMAND -> _livePartialTranscript.value = partial.replace(WAKE_WORD_REGEX, "")
+                SessionKind.WAKE -> if (WAKE_WORD_REGEX.containsMatchIn(partial)) {
+                    // She heard her name: switch the UI to "Listening…" straight away.
                     _wakeWordArmed.value = true
+                    _isActivelyListening.value = true
+                    _livePartialTranscript.value = partial.replace(WAKE_WORD_REGEX, "").trim()
                 }
+                null -> Unit
             }
         }
 
         override fun onResults(results: Bundle?) {
-            _isActivelyListening.value = false
+            val kind = sessionKind
+            val wasArmed = _wakeWordArmed.value
+            onSessionEnded()
+            hardErrorCount = 0
             val rawSpoken = results
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.firstOrNull()
@@ -308,24 +595,34 @@ class VoiceCommandService(
                 .orEmpty()
             _livePartialTranscript.value = ""
 
-            if (rawSpoken.isNotEmpty()) {
-                if (_pendingAction.value != null && ABORT_COMMAND_REGEX.matches(rawSpoken)) {
-                    cancelPendingAction()
-                } else {
-                    val hasWakePhrase = WAKE_WORD_REGEX.containsMatchIn(rawSpoken)
-                    val cleanedCommand = rawSpoken.replace(WAKE_WORD_REGEX, "").trim()
-                    if (hasWakePhrase || _wakeWordArmed.value || _isWakeWordEnabled.value) {
-                        _wakeWordArmed.value = false
-                        val finalCommand = cleanedCommand.ifEmpty {
-                            "Hi Mochi, I'm listening"
-                        }
-                        onCommandRecognizedCallback?.invoke(finalCommand)
-                    }
-                }
+            if (rawSpoken.isEmpty()) {
+                reevaluate(delayMs = WAKE_RESTART_MS)
+                return
+            }
+            if (_pendingAction.value != null && ABORT_COMMAND_REGEX.matches(rawSpoken)) {
+                cancelPendingAction()
+                reevaluate(delayMs = WAKE_RESTART_MS)
+                return
             }
 
-            if (_isWakeWordEnabled.value) {
-                scheduleListeningRestart(700L)
+            val hasWakePhrase = WAKE_WORD_REGEX.containsMatchIn(rawSpoken)
+            val cleaned = rawSpoken.replace(WAKE_WORD_REGEX, " ").trim()
+            when {
+                kind == SessionKind.COMMAND -> {
+                    if (cleaned.isNotEmpty()) deliverCommand(cleaned) else reevaluate(WAKE_RESTART_MS)
+                }
+                hasWakePhrase || wasArmed -> {
+                    if (cleaned.length >= 2) {
+                        deliverCommand(cleaned)
+                    } else {
+                        // Just "Hey Elena" — open a command session for the actual request.
+                        startSession(SessionKind.COMMAND)
+                    }
+                }
+                else -> {
+                    // Background chatter without her name: ignore it (this used to be sent as a command).
+                    reevaluate(delayMs = WAKE_RESTART_MS)
+                }
             }
         }
 
@@ -448,9 +745,7 @@ class VoiceCommandService(
             return
         }
         countdownJob?.cancel()
-        if (onExecuteConfirmed != null) {
-            onExecutePendingActionCallback = onExecuteConfirmed
-        }
+        pendingExecuteOverride = onExecuteConfirmed
         val title = when (turn.actionType) {
             CompanionActionType.WHATSAPP_CALL -> "WhatsApp Call · ${turn.actionRecipient.ifBlank { "Contact" }}"
             CompanionActionType.WHATSAPP_CONTACTS -> "Opening WhatsApp Contacts"
@@ -501,7 +796,9 @@ class VoiceCommandService(
             val finalPending = _pendingAction.value
             if (finalPending != null && finalPending.id == pending.id) {
                 _pendingAction.value = null
-                onExecutePendingActionCallback?.invoke(finalPending)
+                val exec = onExecutePendingActionCallback
+                pendingExecuteOverride = null
+                exec?.invoke(finalPending)
             }
         }
     }
@@ -513,6 +810,7 @@ class VoiceCommandService(
         countdownJob?.cancel()
         val cancelled = _pendingAction.value
         _pendingAction.value = null
+        pendingExecuteOverride = null
         return cancelled
     }
 
@@ -523,7 +821,9 @@ class VoiceCommandService(
         countdownJob?.cancel()
         val current = _pendingAction.value ?: return null
         _pendingAction.value = null
-        onExecutePendingActionCallback?.invoke(current)
+        val exec = onExecutePendingActionCallback
+        pendingExecuteOverride = null
+        exec?.invoke(current)
         return current
     }
 
@@ -549,12 +849,7 @@ class VoiceCommandService(
     fun release() {
         countdownJob?.cancel()
         restartListeningJob?.cancel()
-        mainHandler.post {
-            try {
-                speechRecognizer?.destroy()
-                speechRecognizer = null
-            } catch (_: Throwable) {
-            }
-        }
+        awaitReplyJob?.cancel()
+        runOnMain { cancelSession(destroy = true) }
     }
 }

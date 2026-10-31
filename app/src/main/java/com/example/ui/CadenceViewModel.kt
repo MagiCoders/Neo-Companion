@@ -51,10 +51,8 @@ class CadenceViewModel(
 
     val characterController = CharacterController(viewModelScope)
 
-    val voiceCommandService = VoiceCommandService(
-        appContext = appContext,
-        scope = viewModelScope
-    )
+    /** Process-wide voice engine shared with the floating overlay (one mic owner). */
+    val voiceCommandService = VoiceCommandService.shared(appContext)
 
     val pendingVoiceAction: StateFlow<PendingVoiceAction?> = voiceCommandService.pendingAction
     val isWakeWordListeningActive: StateFlow<Boolean> = voiceCommandService.isActivelyListening
@@ -94,6 +92,11 @@ class CadenceViewModel(
     val settings: StateFlow<MochiPersistentSettings> = _settings.asStateFlow()
 
     private fun loadSettingsFromDisk(): MochiPersistentSettings {
+        // v2: the always-on wake word used to default to ON and caused the mic to open and close
+        // in a loop. Reset it to OFF once; the user can turn it back on in Settings.
+        if (prefs.getInt("settingsSchema", 1) < 2) {
+            prefs.edit().putBoolean("wakeWordEnabled", false).putInt("settingsSchema", 2).apply()
+        }
         val defaultPerms = setOf(
             "Microphone",
             "Display over other apps",
@@ -111,7 +114,7 @@ class CadenceViewModel(
             ) ?: "",
             preferredLanguage = prefs.getString("preferredLanguage", "English") ?: "English",
             floatingCompanionEnabled = prefs.getBoolean("floatingCompanionEnabled", true),
-            wakeWordEnabled = prefs.getBoolean("wakeWordEnabled", true),
+            wakeWordEnabled = prefs.getBoolean("wakeWordEnabled", false),
             busyWatchingVideos = prefs.getBoolean("busyWatchingVideos", true),
             busyPlayingGames = prefs.getBoolean("busyPlayingGames", true),
             busyFullScreenApps = prefs.getBoolean("busyFullScreenApps", true),
@@ -370,6 +373,17 @@ class CadenceViewModel(
         if (_executedOrCancelledTurnIds.value.contains(turn.id)) return
         _executedOrCancelledTurnIds.value = _executedOrCancelledTurnIds.value + turn.id
         voiceCommandService.cancelPendingAction()
+        // Opening another app (WhatsApp, YouTube, a call…): bring the companion along as the
+        // floating overlay. Started now, while the app is still visible, so it may use the mic.
+        val leavesApp = turn.actionType !in setOf(
+            CompanionActionType.NONE,
+            CompanionActionType.SPEAK_LOUD,
+            CompanionActionType.NAVIGATE_ROUTE,
+            CompanionActionType.WHATS_PLAYING
+        )
+        if (leavesApp && _settings.value.floatingCompanionEnabled) {
+            FloatingCompanionService.startIfEnabled(context)
+        }
         voiceCommandService.executeActionIntent(
             context = context,
             tts = tts,
@@ -723,7 +737,10 @@ class CadenceViewModel(
         userText: String
     ) {
         val clean = userText.trim()
-        if (clean.isEmpty() || _isCompanionThinking.value) return
+        if (clean.isEmpty() || _isCompanionThinking.value) {
+            voiceCommandService.clearAwaitingReply()
+            return
+        }
         val lower = clean.lowercase()
 
         // Voice cancel command ("stop", "cancel")
@@ -735,6 +752,7 @@ class CadenceViewModel(
             }
             tts?.stop()
             characterController.transitionTo(CharacterRuntimeState.Idle)
+            voiceCommandService.clearAwaitingReply()
             return
         }
 
@@ -817,6 +835,7 @@ class CadenceViewModel(
                 }
             } finally {
                 _isCompanionThinking.value = false
+                voiceCommandService.clearAwaitingReply()
             }
         }
     }

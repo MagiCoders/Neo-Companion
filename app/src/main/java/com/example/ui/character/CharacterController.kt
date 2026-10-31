@@ -221,6 +221,8 @@ class CharacterController(
 
         speechJob?.cancel()
         speechJob = scope.launch(Dispatchers.Main) {
+            // Close the mic while she talks so she never "hears" herself as a new command.
+            com.example.ai.VoiceCommandService.notifyAssistantSpeaking(true)
             transitionTo(CharacterRuntimeState.Talking)
             val estimatedDurationMs = (cleanText.length * 58L / character.speechRate.coerceAtLeast(0.7f))
                 .toLong()
@@ -230,19 +232,6 @@ class CharacterController(
             var wavRmsEnvelope: FloatArray? = null
 
             try {
-                try {
-                    val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-                    audioManager?.let { am ->
-                        val maxVol = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-                        val curVol = am.getStreamVolume(AudioManager.STREAM_MUSIC)
-                        val targetMin = (maxVol * 0.65f).toInt().coerceAtLeast(1)
-                        if (curVol < targetMin) {
-                            am.setStreamVolume(AudioManager.STREAM_MUSIC, targetMin, 0)
-                        }
-                    }
-                } catch (_: Throwable) {
-                }
-
                 if (tts != null) {
                     try {
                         com.example.ai.OmnichannelMediaBridge.configureHumanLikeNeuralVoice(tts, character)
@@ -316,9 +305,19 @@ class CharacterController(
                     frameIndex++
                     delay(16L)
                 }
+                // The length estimate can run out before the engine finishes: wait for real silence.
+                if (tts != null) {
+                    var waited = 0L
+                    while (isActive && waited < 30_000L && (try { tts.isSpeaking } catch (_: Throwable) { false })) {
+                        targetSpeechRms = 0.18f
+                        delay(100L)
+                        waited += 100L
+                    }
+                }
             } finally {
                 targetSpeechRms = 0f
                 activeWordBoost = 0f
+                com.example.ai.VoiceCommandService.notifyAssistantSpeaking(false)
                 transitionTo(CharacterRuntimeState.Reacting("happy"))
             }
         }

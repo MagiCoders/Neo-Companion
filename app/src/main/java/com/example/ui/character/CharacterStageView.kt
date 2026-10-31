@@ -68,7 +68,11 @@ fun CharacterStageView(
     controller: CharacterController,
     modifier: Modifier = Modifier,
     halfResolutionMode: Boolean = false,
-    fullBodyStandingMode: Boolean = false
+    fullBodyStandingMode: Boolean = false,
+    /** False on the floating overlay: no glow disc, so nothing gets clipped into a box at the window edge. */
+    showAura: Boolean = true,
+    /** False when the parent handles taps itself (overlay: tap = listen, long-press = quick ask). */
+    handleTaps: Boolean = true
 ) {
     val context = LocalContext.current
     val view = LocalView.current
@@ -143,7 +147,8 @@ fun CharacterStageView(
         modifier = modifier
             .fillMaxSize()
             .testTag("character_stage_${character.id}")
-            .pointerInput(character.id) {
+            .pointerInput(character.id, handleTaps) {
+                if (!handleTaps) return@pointerInput
                 detectTapGestures(
                     onTap = { offset ->
                         view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
@@ -169,7 +174,8 @@ fun CharacterStageView(
             pose = pose,
             accentColor = character.accent,
             fxPhase = fxPhase,
-            fullBodyStandingMode = fullBodyStandingMode
+            fullBodyStandingMode = fullBodyStandingMode,
+            showAura = showAura
         )
 
         // 2. Sculpted 3D Volumetric Studio Character (Bust Mode for Stage/Picker, Full-Body Mode for Floating Module)
@@ -315,7 +321,8 @@ private fun DrawScope.renderCharacterRimAndGroundShadow(
     pose: CharacterFramePose,
     accentColor: Color,
     fxPhase: Float,
-    fullBodyStandingMode: Boolean
+    fullBodyStandingMode: Boolean,
+    showAura: Boolean = true
 ) {
     val w = size.width
     val h = size.height
@@ -349,7 +356,7 @@ private fun DrawScope.renderCharacterRimAndGroundShadow(
         else -> 0.20f
     }
 
-    drawCircle(
+    if (showAura) drawCircle(
         brush = Brush.radialGradient(
             colors = listOf(
                 accentColor.copy(alpha = rimPulse.coerceIn(0.12f, 0.42f)),
@@ -364,7 +371,7 @@ private fun DrawScope.renderCharacterRimAndGroundShadow(
     )
 
     // Soft floating bokeh particles matching Home_7dda243e.png
-    if (!fullBodyStandingMode) {
+    if (!fullBodyStandingMode && showAura) {
         val bokehOffsets = listOf(
             Triple(-0.92f, -0.32f, 0.055f),
             Triple(0.84f, -0.58f, 0.075f),

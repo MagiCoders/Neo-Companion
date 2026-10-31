@@ -37,37 +37,51 @@ fun MochiTheme(
         label = "theme_surface_crossfade"
     )
 
+    // Point every MochiTokens read at the active palette before any child composes.
+    val palette = if (visualStyle.isLight) MochiPalette.Light else MochiPalette.Dark
+    if (MochiTokens.palette !== palette) {
+        MochiTokens.palette = palette
+    }
+
     val colorScheme = if (visualStyle.isLight) {
         lightColorScheme(
             primary = animatedAccent,
-            onPrimary = MochiTokens.lightTextPrimary,
-            secondary = visualStyle.secondaryGlow,
-            onSecondary = MochiTokens.lightTextPrimary,
+            onPrimary = palette.onAccent,
+            secondary = palette.gold,
+            onSecondary = palette.textPrimary,
             background = animatedBg,
-            onBackground = MochiTokens.lightTextPrimary,
+            onBackground = palette.textPrimary,
             surface = animatedSurface,
-            onSurface = MochiTokens.lightTextPrimary,
-            surfaceVariant = animatedSurface,
-            onSurfaceVariant = MochiTokens.lightTextSecondary,
-            outline = MochiTokens.lightHairline,
-            error = MochiTokens.danger,
+            onSurface = palette.textPrimary,
+            surfaceVariant = palette.card2,
+            onSurfaceVariant = palette.textSecondary,
+            surfaceContainerHigh = palette.sheet,
+            surfaceContainerHighest = palette.sheet,
+            outline = palette.border,
+            outlineVariant = palette.divider,
+            scrim = palette.scrim,
+            error = palette.danger,
             onError = Color.White
         )
     } else {
         darkColorScheme(
             primary = animatedAccent,
-            onPrimary = MochiTokens.bg,
-            secondary = visualStyle.secondaryGlow,
-            onSecondary = MochiTokens.textPrimary,
+            onPrimary = palette.onAccent,
+            secondary = palette.gold,
+            onSecondary = palette.textPrimary,
             background = animatedBg,
-            onBackground = MochiTokens.textPrimary,
+            onBackground = palette.textPrimary,
             surface = animatedSurface,
-            onSurface = MochiTokens.textPrimary,
-            surfaceVariant = animatedSurface,
-            onSurfaceVariant = MochiTokens.textSecondary,
-            outline = MochiTokens.hairline,
-            error = MochiTokens.danger,
-            onError = MochiTokens.textPrimary
+            onSurface = palette.textPrimary,
+            surfaceVariant = palette.card2,
+            onSurfaceVariant = palette.textSecondary,
+            surfaceContainerHigh = palette.sheet,
+            surfaceContainerHighest = palette.sheet,
+            outline = palette.border,
+            outlineVariant = palette.divider,
+            scrim = palette.scrim,
+            error = palette.danger,
+            onError = Color.White
         )
     }
 

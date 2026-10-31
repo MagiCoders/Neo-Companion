@@ -182,12 +182,6 @@ object OmnichannelMediaBridge {
         try {
             val cleanSpeech = formatNaturalSpeechProsody(text)
             if (cleanSpeech.isEmpty()) return
-            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-            audioManager?.let { am ->
-                val maxVol = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-                val targetVol = (maxVol * 0.85f).toInt().coerceAtLeast(1)
-                am.setStreamVolume(AudioManager.STREAM_MUSIC, targetVol, 0)
-            }
             configureHumanLikeNeuralVoice(tts, character)
             val params = Bundle().apply {
                 putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
@@ -199,6 +193,7 @@ object OmnichannelMediaBridge {
                 params,
                 "mochi_loud_${System.currentTimeMillis()}"
             )
+            VoiceCommandService.shared(context).watchTtsUntilSilent(tts)
         } catch (_: Exception) {
         }
     }

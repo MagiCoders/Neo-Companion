@@ -59,7 +59,7 @@ data class MochiPersistentSettings(
     val userAboutBio: String = "Vegetarian on weekdays, enjoys quick 15-minute dinners and calm evening focus.",
     val preferredLanguage: String = "English",
     val floatingCompanionEnabled: Boolean = true,
-    val wakeWordEnabled: Boolean = true,
+    val wakeWordEnabled: Boolean = false,
     val busyWatchingVideos: Boolean = true,
     val busyPlayingGames: Boolean = true,
     val busyFullScreenApps: Boolean = true,

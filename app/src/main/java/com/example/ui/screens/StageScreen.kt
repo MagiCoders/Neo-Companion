@@ -138,6 +138,9 @@ fun StageScreen(
     onSelectVisualStyle: (MochiVisualStyle) -> Unit = {},
     isFloatingCompanionMode: Boolean = false,
     onToggleFloatingCompanionMode: (Boolean) -> Unit = {},
+    isListening: Boolean = false,
+    livePartialTranscript: String = "",
+    onMicTap: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -145,127 +148,27 @@ fun StageScreen(
     val accent = LocalCharacterAccent.current
     val runtimeState by controller.state.collectAsStateWithLifecycle()
     var draftText by rememberSaveable { mutableStateOf("") }
-    var isListeningMic by remember { mutableStateOf(false) }
-
+    // The mic belongs to the shared VoiceCommandService; this screen only shows its state.
+    val isListeningMic = isListening
+    LaunchedEffect(livePartialTranscript) {
+        if (livePartialTranscript.isNotBlank()) draftText = livePartialTranscript
+    }
+    LaunchedEffect(isListening) {
+        if (isListening) {
+            controller.transitionTo(CharacterRuntimeState.Listening)
+        } else if (controller.state.value is CharacterRuntimeState.Listening) {
+            controller.transitionTo(CharacterRuntimeState.Idle)
+            draftText = ""
+        }
+    }
     val textPrimary = if (visualStyle.isLight) MochiTokens.lightTextPrimary else MochiTokens.textPrimary
     val textSecondary = if (visualStyle.isLight) MochiTokens.lightTextSecondary else MochiTokens.textSecondary
     val hairline = if (visualStyle.isLight) MochiTokens.lightHairline else MochiTokens.hairline
     val surfaceRaised = if (visualStyle.isLight) MochiTokens.lightBgRaised else MochiTokens.bgRaised
 
-    val speechRecognizer = remember {
-        if (SpeechRecognizer.isRecognitionAvailable(context)) {
-            SpeechRecognizer.createSpeechRecognizer(context)
-        } else {
-            null
-        }
-    }
-
-    fun startVoiceRecognition() {
-        if (speechRecognizer == null) {
-            controller.transitionTo(CharacterRuntimeState.Listening)
-            return
-        }
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-        }
-        try {
-            speechRecognizer.startListening(intent)
-        } catch (_: Throwable) {
-            isListeningMic = false
-        }
-    }
-
-    DisposableEffect(speechRecognizer, wakeWordEnabled) {
-        val listener = object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {
-                isListeningMic = true
-                controller.transitionTo(CharacterRuntimeState.Listening)
-            }
-            override fun onBeginningOfSpeech() {}
-            override fun onRmsChanged(rmsdB: Float) {
-                controller.updateMicRms(rmsdB)
-            }
-            override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEndOfSpeech() {
-                isListeningMic = false
-            }
-            override fun onError(error: Int) {
-                isListeningMic = false
-                if (runtimeState is CharacterRuntimeState.Listening) {
-                    controller.transitionTo(CharacterRuntimeState.Idle)
-                }
-            }
-            override fun onResults(results: Bundle?) {
-                isListeningMic = false
-                val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                val rawSpoken = matches?.firstOrNull()?.trim().orEmpty()
-                if (rawSpoken.isNotEmpty()) {
-                    // Strip optional wake words ("Hi Mochi", "Hey Mochi", "Hi Elena", "Hey Elena")
-                    val cleanedCommand = rawSpoken
-                        .replace(Regex("(?i)^(hi|hey|hello|okay|ok)\\s+(mochi|elena|kaito|marco)[,\\s]*"), "")
-                        .trim()
-                        .ifEmpty { "Hi ${character.displayName.substringAfter(" ")}, I'm listening!" }
-
-                    draftText = ""
-                    if (!isFloatingCompanionMode) {
-                        onToggleConversationSheet(true)
-                    }
-                    onSendMessage(cleanedCommand)
-                } else {
-                    controller.transitionTo(CharacterRuntimeState.Idle)
-                }
-            }
-            override fun onPartialResults(partialResults: Bundle?) {
-                val partial = partialResults
-                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    ?.firstOrNull()
-                    .orEmpty()
-                if (partial.isNotBlank()) {
-                    draftText = partial
-                }
-            }
-            override fun onEvent(eventType: Int, params: Bundle?) {}
-        }
-        speechRecognizer?.setRecognitionListener(listener)
-        onDispose {
-            try {
-                speechRecognizer?.destroy()
-            } catch (_: Throwable) {
-            }
-        }
-    }
-
-    val audioPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) {
-            startVoiceRecognition()
-        }
-    }
-
     fun triggerVoiceMic() {
         view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-        val hasAudioPerm = ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.RECORD_AUDIO
-        ) == PackageManager.PERMISSION_GRANTED
-        if (hasAudioPerm) {
-            if (isListeningMic) {
-                try {
-                    speechRecognizer?.stopListening()
-                } catch (_: Throwable) {
-                }
-                isListeningMic = false
-                controller.transitionTo(CharacterRuntimeState.Idle)
-            } else {
-                startVoiceRecognition()
-            }
-        } else {
-            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-        }
+        onMicTap()
     }
 
     if (isFloatingCompanionMode) {

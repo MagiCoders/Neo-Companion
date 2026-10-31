@@ -14,7 +14,9 @@ import android.util.Log
 import android.util.Rational
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
@@ -35,6 +37,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -52,15 +55,19 @@ import androidx.credentials.GetCredentialResponse
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.NoCredentialException
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.ai.VoiceCommandService
 import com.example.ai.configureAppCheck
+import com.example.ui.character.FloatingCompanionService
 import com.example.ui.CadenceViewModel
 import com.example.ui.character.CharacterController
 import com.example.ui.character.CharacterRuntimeState
 import com.example.ui.character.CharacterSpec
 import com.example.ui.character.CharacterStageView
-import com.example.ui.character.GlobalFloatingCompanionModule
 import com.example.ui.components.VoiceUndoCancelOverlay
 import com.example.ui.screens.AuthScreen
 import com.example.ui.screens.CharacterPickerScreen
@@ -140,63 +147,53 @@ enum class MochiScreenRoute(val hashRoute: String) {
 
 class MainActivity : ComponentActivity() {
 
-    private var isInSystemPiPState by mutableStateOf(false)
+    private val voice by lazy { VoiceCommandService.shared(applicationContext) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         configureAppCheck(this, intent)
         enableEdgeToEdge()
-        configureAutoPictureInPictureParams()
 
         setContent {
-            MochiLifeRootContainer(
-                isInPictureInPictureMode = isInSystemPiPState
-            )
+            MochiLifeRootContainer()
         }
     }
 
-    private fun buildPiPParams(): PictureInPictureParams {
-        val builder = PictureInPictureParams.Builder()
-            .setAspectRatio(Rational(1, 1))
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            builder.setAutoEnterEnabled(true)
-            builder.setSeamlessResizeEnabled(true)
-        }
-        return builder.build()
+    override fun onStart() {
+        super.onStart()
+        // Back in the app: the in-app companion takes over from the floating one.
+        FloatingCompanionService.stopSystemOverlay(this)
+        voice.acquireHost("activity")
     }
 
-    private fun configureAutoPictureInPictureParams() {
-        try {
-            setPictureInPictureParams(buildPiPParams())
-        } catch (e: Exception) {
-            Log.w("MochiPiP", "PiP params setup skipped: ${e.message}")
-        }
+    override fun onResume() {
+        super.onResume()
+        voice.updateRecordPermission(
+            ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+        )
     }
 
+    /**
+     * Home / Recents pressed. The activity is still in the foreground at this moment, which is
+     * what Android requires for the overlay's microphone foreground service. (The old code tried
+     * to enter a square Picture-in-Picture window here instead.)
+     */
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         if (FirebaseAuth.getInstance().currentUser != null) {
-            try {
-                enterPictureInPictureMode(buildPiPParams())
-            } catch (e: Exception) {
-                Log.w("MochiPiP", "Could not enter Picture-in-Picture mode: ${e.message}")
-            }
+            FloatingCompanionService.startIfEnabled(this)
         }
     }
 
-    override fun onPictureInPictureModeChanged(
-        isInPictureInPictureMode: Boolean,
-        newConfig: Configuration
-    ) {
-        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
-        isInSystemPiPState = isInPictureInPictureMode
+    override fun onStop() {
+        super.onStop()
+        voice.releaseHost("activity")
     }
 }
 
 @Composable
-fun MochiLifeRootContainer(
-    isInPictureInPictureMode: Boolean = false
-) {
+fun MochiLifeRootContainer() {
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
     val coroutineScope = rememberCoroutineScope()
@@ -276,16 +273,6 @@ fun MochiLifeRootContainer(
         characterAccent = activeAccent,
         visualStyle = selectedVisualStyle
     ) {
-        if (isInPictureInPictureMode) {
-            PiPCharacterWindow(
-                character = selectedCharacter,
-                controller = viewModel.characterController,
-                latestMessage = chatHistory.lastOrNull { !it.senderIsUser }?.message,
-                isThinking = isCompanionThinking
-            )
-            return@MochiTheme
-        }
-
         if (currentUser == null) {
             AuthScreen(
                 isSigningIn = isSigningIn,
@@ -325,76 +312,6 @@ fun MochiLifeRootContainer(
 }
 
 @Composable
-private fun PiPCharacterWindow(
-    character: CharacterSpec,
-    controller: CharacterController,
-    latestMessage: String? = null,
-    isThinking: Boolean = false
-) {
-    val visualStyle = LocalVisualStyle.current
-    val runtimeState by controller.state.collectAsStateWithLifecycle()
-
-    val statusText = when {
-        isThinking || runtimeState is CharacterRuntimeState.Thinking -> "Thinking..."
-        runtimeState is CharacterRuntimeState.Listening -> "Listening..."
-        runtimeState is CharacterRuntimeState.Talking -> "Speaking"
-        else -> latestMessage ?: character.displayName
-    }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .border(
-                width = 2.dp,
-                brush = Brush.linearGradient(listOf(character.accent, visualStyle.secondaryGlow)),
-                shape = MochiShapes.card
-            ),
-        contentAlignment = Alignment.Center
-    ) {
-        AuroraBackground(
-            accentColor = character.accent,
-            visualStyle = visualStyle
-        )
-        CharacterStageView(
-            character = character,
-            controller = controller,
-            halfResolutionMode = true,
-            modifier = Modifier.fillMaxSize()
-        )
-
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .padding(6.dp)
-                .clip(MochiShapes.pill)
-                .background(visualStyle.bgRaised.copy(alpha = 0.88f))
-                .border(1.dp, character.accent.copy(alpha = 0.75f), MochiShapes.pill)
-                .padding(horizontal = 8.dp, vertical = 4.dp)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .clip(CircleShape)
-                        .background(character.accent)
-                )
-                Text(
-                    text = statusText,
-                    style = MochiType.Label,
-                    color = MochiTokens.textPrimary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-    }
-}
-
-@Composable
 fun MochiAppHost(
     viewModel: CadenceViewModel,
     initialRoute: MochiScreenRoute = MochiScreenRoute.STAGE
@@ -427,6 +344,7 @@ fun MochiAppHost(
     val currentMoodTone by viewModel.currentMoodTone.collectAsStateWithLifecycle()
     val pendingVoiceAction by viewModel.pendingVoiceAction.collectAsStateWithLifecycle()
     val isWakeWordListeningActive by viewModel.isWakeWordListeningActive.collectAsStateWithLifecycle()
+    val livePartialTranscript by viewModel.liveVoicePartialTranscript.collectAsStateWithLifecycle()
 
     var ttsInstance by remember { mutableStateOf<TextToSpeech?>(null) }
     DisposableEffect(context) {
@@ -451,26 +369,92 @@ fun MochiAppHost(
         }
     }
 
-    // Keep global 'Hi Mochi' wake-word listening loop active whenever wakeWordEnabled & RECORD_AUDIO granted
-    DisposableEffect(settings.wakeWordEnabled, selectedCharacter) {
+    // ---- Voice: one shared engine. Bind once; the latest TTS/context are read when a command arrives.
+    val latestTts by rememberUpdatedState(ttsInstance)
+    DisposableEffect(viewModel) {
         viewModel.voiceCommandService.bindCallbacks(
+            owner = "app",
             onCommandRecognized = { recognizedCommand ->
-                viewModel.sendMessageToMochi(context, ttsInstance, recognizedCommand)
+                if (viewModel.currentHashRoute.value == MochiHashRoutes.STAGE) {
+                    showConversationSheet = true
+                }
+                viewModel.sendMessageToMochi(context, latestTts, recognizedCommand)
             },
             onExecutePendingAction = { confirmedAction ->
-                viewModel.executeTurnActionNow(context, ttsInstance, confirmedAction.turn)
+                viewModel.executeTurnActionNow(context, latestTts, confirmedAction.turn)
             }
         )
-        val hasAudioPerm = ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.RECORD_AUDIO
-        ) == PackageManager.PERMISSION_GRANTED
+        onDispose { viewModel.voiceCommandService.unbindCallbacks("app") }
+    }
+
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        viewModel.voiceCommandService.updateRecordPermission(granted)
+        if (!granted && viewModel.settings.value.wakeWordEnabled) {
+            viewModel.updateSettings { it.copy(wakeWordEnabled = false) }
+        }
+    }
+
+    fun hasMic(): Boolean = ContextCompat.checkSelfPermission(
+        context, Manifest.permission.RECORD_AUDIO
+    ) == PackageManager.PERMISSION_GRANTED
+
+    LaunchedEffect(settings.wakeWordEnabled) {
+        val granted = hasMic()
         viewModel.voiceCommandService.setWakeWordListeningEnabled(
             enabled = settings.wakeWordEnabled,
-            hasRecordPermission = hasAudioPerm
+            hasRecordPermission = granted
         )
-        onDispose {
-            // Keep service alive across internal route transitions; only stop on host disposal
+        if (settings.wakeWordEnabled && !granted) {
+            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    // ---- Floating companion over other apps (the real system overlay, not an in-app imitation).
+    var showOverlayPermissionSheet by rememberSaveable { mutableStateOf(false) }
+    var floatAfterPermission by rememberSaveable { mutableStateOf(false) }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* Optional: the overlay works either way; this only shows its "Hide" notification. */ }
+
+    fun launchFloatingCompanion() {
+        val activity = context.findActivity()
+        if (!FloatingCompanionService.canDrawOverlays(context)) {
+            showOverlayPermissionSheet = true
+            return
+        }
+        if (!viewModel.settings.value.floatingCompanionEnabled) {
+            viewModel.updateSettings { it.copy(floatingCompanionEnabled = true) }
+        }
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        viewModel.launchSystemOverlayIfPermitted(activity, moveAppToBackground = true)
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && floatAfterPermission) {
+                floatAfterPermission = false
+                if (FloatingCompanionService.canDrawOverlays(context)) {
+                    launchFloatingCompanion()
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    fun onMicTapped() {
+        if (hasMic()) {
+            viewModel.voiceCommandService.triggerManualMicSession(hasRecordPermission = true)
+        } else {
+            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 
@@ -563,8 +547,11 @@ fun MochiAppHost(
                             },
                             visualStyle = selectedVisualStyle,
                             onSelectVisualStyle = viewModel::selectVisualStyle,
-                            isFloatingCompanionMode = isFloatingCompanionMode,
-                            onToggleFloatingCompanionMode = viewModel::setFloatingCompanionMode
+                            isFloatingCompanionMode = false,
+                            onToggleFloatingCompanionMode = { wantsFloat -> if (wantsFloat) launchFloatingCompanion() },
+                            isListening = isWakeWordListeningActive,
+                            livePartialTranscript = livePartialTranscript,
+                            onMicTap = { onMicTapped() }
                         )
                     }
 
@@ -820,34 +807,6 @@ fun MochiAppHost(
                 }
             }
 
-            // Global Floating 3D Companion Overlay Module across activity screens (or when expanded)
-            if (settings.floatingCompanionEnabled &&
-                (currentHashRoute != MochiHashRoutes.STAGE || isFloatingCompanionMode) &&
-                currentHashRoute != MochiHashRoutes.DRIVING
-            ) {
-                GlobalFloatingCompanionModule(
-                    character = selectedCharacter,
-                    controller = viewModel.characterController,
-                    latestTurn = chatHistory.lastOrNull { !it.senderIsUser } ?: chatHistory.lastOrNull(),
-                    isThinking = isCompanionThinking,
-                    isListening = isWakeWordListeningActive,
-                    isExpandedFullOverlay = isFloatingCompanionMode,
-                    onSetExpandedFullOverlay = { expanded ->
-                        viewModel.setFloatingCompanionMode(expanded)
-                    },
-                    onSendMessage = { message ->
-                        viewModel.sendMessageToMochi(context, ttsInstance, message)
-                    },
-                    onStartVoiceMic = {
-                        val hasAudioPerm = ContextCompat.checkSelfPermission(
-                            context,
-                            Manifest.permission.RECORD_AUDIO
-                        ) == PackageManager.PERMISSION_GRANTED
-                        viewModel.voiceCommandService.triggerManualMicSession(hasAudioPerm)
-                    }
-                )
-            }
-
             // Global 3-Second 'Undo/Cancel' Voice Action Overlay Pill
             VoiceUndoCancelOverlay(
                 pendingAction = pendingVoiceAction,
@@ -857,6 +816,26 @@ fun MochiAppHost(
                 },
                 modifier = Modifier.align(Alignment.TopCenter)
             )
+
+            if (showOverlayPermissionSheet) {
+                OverlayPermissionDialog(
+                    companionName = selectedCharacter.displayName.substringAfter(" "),
+                    onOpenSettings = {
+                        showOverlayPermissionSheet = false
+                        floatAfterPermission = true
+                        val intent = android.content.Intent(
+                            android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            android.net.Uri.parse("package:${context.packageName}")
+                        )
+                        try {
+                            context.startActivity(intent)
+                        } catch (_: Exception) {
+                            context.startActivity(android.content.Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION))
+                        }
+                    },
+                    onDismiss = { showOverlayPermissionSheet = false }
+                )
+            }
         }
 
         if (showBottomBar) {
@@ -879,4 +858,37 @@ fun MochiAppHost(
             )
         }
     }
+}
+
+@Composable
+private fun OverlayPermissionDialog(
+    companionName: String,
+    onOpenSettings: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val accent = com.example.ui.theme.LocalCharacterAccent.current
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MochiTokens.sheet,
+        titleContentColor = MochiTokens.textPrimary,
+        textContentColor = MochiTokens.textSecondary,
+        shape = MochiShapes.sheet,
+        title = { Text("Let $companionName float over other apps", style = MochiType.Title) },
+        text = {
+            Text(
+                "Android asks you to allow \"Display over other apps\" once. Turn it on for MochiLife on the next screen, then come back — $companionName will start floating straight away.",
+                style = MochiType.Body
+            )
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = onOpenSettings) {
+                Text("Open settings", style = MochiType.Label, color = MochiTokens.accentInk(accent))
+            }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) {
+                Text("Not now", style = MochiType.Label, color = MochiTokens.textSecondary)
+            }
+        }
+    )
 }
