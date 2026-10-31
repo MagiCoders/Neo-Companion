@@ -1,0 +1,6 @@
+{
+  "name": "MochiLife",
+  "description": "Playful 3D AI life & mood companion, 15-minute Fridge & Pantry Photo Chef, and gamified RPG daily quests with XP, Gold Coins, and Google Cloud sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

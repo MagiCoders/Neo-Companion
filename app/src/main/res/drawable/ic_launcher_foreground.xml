@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Soft 3D drop shadow under Mochi -->
+    <path
+        android:pathData="M30,78a24,7 0,1 0,48 0a24,7 0,1 0,-48 0"
+        android:fillColor="#33BF360C" />
+    <!-- Mochi round 3D body -->
+    <path
+        android:pathData="M54,30 C35,30 26,43 26,57 C26,71 36,78 54,78 C72,78 82,71 82,57 C82,43 73,30 54,30 Z"
+        android:fillColor="#FFFFFBF5" />
+    <!-- 3D specular highlight on top left -->
+    <path
+        android:pathData="M36,41a10,5 0,1 0,20 0a10,5 0,1 0,-20 0"
+        android:fillColor="#CCFFFFFF" />
+    <!-- Golden crown / sprout star on top -->
+    <path
+        android:pathData="M54,19 L57,26 L65,26 L59,31 L61,38 L54,34 L47,38 L49,31 L43,26 L51,26 Z"
+        android:fillColor="#FFFFB300" />
+    <!-- Cute eyes -->
+    <path
+        android:pathData="M43,53m-3.5,0a3.5,3.5 0,1 1,7 0a3.5,3.5 0,1 1,-7 0"
+        android:fillColor="#FF2D232E" />
+    <path
+        android:pathData="M65,53m-3.5,0a3.5,3.5 0,1 1,7 0a3.5,3.5 0,1 1,-7 0"
+        android:fillColor="#FF2D232E" />
+    <!-- Eye sparkles -->
+    <path
+        android:pathData="M42,51.5m-1.2,0a1.2,1.2 0,1 1,2.4 0a1.2,1.2 0,1 1,-2.4 0"
+        android:fillColor="#FFFFFFFF" />
+    <path
+        android:pathData="M64,51.5m-1.2,0a1.2,1.2 0,1 1,2.4 0a1.2,1.2 0,1 1,-2.4 0"
+        android:fillColor="#FFFFFFFF" />
+    <!-- Rosy cheeks -->
+    <path
+        android:pathData="M33,58a4.5,2.8 0,1 0,9 0a4.5,2.8 0,1 0,-9 0"
+        android:fillColor="#FFFF8A80" />
+    <path
+        android:pathData="M66,58a4.5,2.8 0,1 0,9 0a4.5,2.8 0,1 0,-9 0"
+        android:fillColor="#FFFF8A80" />
+    <!-- Happy smile -->
+    <path
+        android:pathData="M49,58 Q54,64 59,58"
+        android:strokeWidth="2.8"
+        android:strokeColor="#FF2D232E"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+</vector>

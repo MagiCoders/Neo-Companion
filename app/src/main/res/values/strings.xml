@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">MochiLife</string>
+    <string name="tagline_editorial">YOUR 3D AI COMPANION • FRIDGE CHEF • DAILY QUESTS</string>
+    <string name="tab_companion">Mochi AI</string>
+    <string name="tab_fridge">Fridge Chef</string>
+    <string name="tab_quests">Quests</string>
+    <string name="tab_wallet">Wallet &amp; Pro</string>
+</resources>

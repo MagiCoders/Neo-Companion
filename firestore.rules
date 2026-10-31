@@ -1,0 +1,164 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: /users/{userId}
+    // Document ID: {userId} (matches request.auth.uid)
+    // Fields:
+    //   - userId: string (required, immutable, matches path userId)
+    //   - displayName: string (required, 1..100 chars)
+    //   - email: string (required, 0..150 chars)
+    //   - companionName: string (required, 1..50 chars)
+    //   - level: int (required, 1..999)
+    //   - xp: int (required, 0..1000000)
+    //   - goldCoins: int (required, 0..1000000)
+    //   - streakDays: int (required, 0..10000)
+    //   - moneySavedDollars: int (required, 0..1000000)
+    //   - aiCreditsRemaining: int (required, 0..10000)
+    //   - aiCreditsMax: int (required, 1..10000)
+    //   - isProSubscriber: bool (required)
+    //   - createdAt: timestamp (required, immutable, <= request.time)
+    //   - updatedAt: timestamp (required, <= request.time)
+    //
+    // Collection: /users/{userId}/quests/{questId}
+    // Document ID: {questId}
+    // Fields:
+    //   - userId: string (required, immutable, matches path userId)
+    //   - title: string (required, 1..200 chars)
+    //   - category: string (required, in ['MEAL', 'MIND', 'DAY', 'WALLET'])
+    //   - xpReward: int (required, 5..5000)
+    //   - coinsReward: int (required, 1..5000)
+    //   - isCompleted: bool (required)
+    //   - createdAt: timestamp (required, immutable, <= request.time)
+    //   - updatedAt: timestamp (required, <= request.time)
+    //
+    // Collection: /users/{userId}/meals/{mealId}
+    // Document ID: {mealId}
+    // Fields:
+    //   - userId: string (required, immutable, matches path userId)
+    //   - title: string (required, 1..150 chars)
+    //   - ingredientsUsed: string (required, 1..500 chars)
+    //   - prepTimeMinutes: int (required, 1..240)
+    //   - calories: int (required, 50..5000)
+    //   - moneySavedDollars: int (required, 1..500)
+    //   - stepsSummary: string (required, 1..2000 chars)
+    //   - isCooked: bool (required)
+    //   - createdAt: timestamp (required, immutable, <= request.time)
+    //   - updatedAt: timestamp (required, <= request.time)
+    // ===============================================================
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidUserProfile(data, userId) {
+      let requiredFields = [
+        'userId', 'displayName', 'email', 'companionName',
+        'level', 'xp', 'goldCoins', 'streakDays', 'moneySavedDollars',
+        'aiCreditsRemaining', 'aiCreditsMax', 'isProSubscriber',
+        'createdAt', 'updatedAt'
+      ];
+      return data.keys().hasAll(requiredFields)
+        && data.keys().hasOnly(requiredFields)
+        && data.userId is string && data.userId == userId
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100
+        && data.email is string && data.email.size() <= 150
+        && data.companionName is string && data.companionName.size() >= 1 && data.companionName.size() <= 50
+        && data.level is int && data.level >= 1 && data.level <= 999
+        && data.xp is int && data.xp >= 0 && data.xp <= 1000000
+        && data.goldCoins is int && data.goldCoins >= 0 && data.goldCoins <= 1000000
+        && data.streakDays is int && data.streakDays >= 0 && data.streakDays <= 10000
+        && data.moneySavedDollars is int && data.moneySavedDollars >= 0 && data.moneySavedDollars <= 1000000
+        && data.aiCreditsRemaining is int && data.aiCreditsRemaining >= 0 && data.aiCreditsRemaining <= 10000
+        && data.aiCreditsMax is int && data.aiCreditsMax >= 1 && data.aiCreditsMax <= 10000
+        && data.isProSubscriber is bool
+        && data.createdAt is timestamp && data.createdAt <= request.time
+        && data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidQuestItem(data, userId) {
+      let requiredFields = [
+        'userId', 'title', 'category', 'xpReward',
+        'coinsReward', 'isCompleted', 'createdAt', 'updatedAt'
+      ];
+      return data.keys().hasAll(requiredFields)
+        && data.keys().hasOnly(requiredFields)
+        && data.userId is string && data.userId == userId
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+        && data.category is string && data.category in ['MEAL', 'MIND', 'DAY', 'WALLET']
+        && data.xpReward is int && data.xpReward >= 5 && data.xpReward <= 5000
+        && data.coinsReward is int && data.coinsReward >= 1 && data.coinsReward <= 5000
+        && data.isCompleted is bool
+        && data.createdAt is timestamp && data.createdAt <= request.time
+        && data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidMealCreation(data, userId) {
+      let requiredFields = [
+        'userId', 'title', 'ingredientsUsed', 'prepTimeMinutes',
+        'calories', 'moneySavedDollars', 'stepsSummary', 'isCooked',
+        'createdAt', 'updatedAt'
+      ];
+      return data.keys().hasAll(requiredFields)
+        && data.keys().hasOnly(requiredFields)
+        && data.userId is string && data.userId == userId
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 150
+        && data.ingredientsUsed is string && data.ingredientsUsed.size() >= 1 && data.ingredientsUsed.size() <= 500
+        && data.prepTimeMinutes is int && data.prepTimeMinutes >= 1 && data.prepTimeMinutes <= 240
+        && data.calories is int && data.calories >= 50 && data.calories <= 5000
+        && data.moneySavedDollars is int && data.moneySavedDollars >= 1 && data.moneySavedDollars <= 500
+        && data.stepsSummary is string && data.stepsSummary.size() >= 1 && data.stepsSummary.size() <= 2000
+        && data.isCooked is bool
+        && data.createdAt is timestamp && data.createdAt <= request.time
+        && data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId)
+        && isValidId(userId)
+        && isValidUserProfile(request.resource.data, userId);
+      allow update: if isOwner(userId)
+        && isValidUserProfile(request.resource.data, userId)
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isOwner(userId);
+
+      match /quests/{questId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId)
+          && isValidId(questId)
+          && isValidQuestItem(request.resource.data, userId);
+        allow update: if isOwner(userId)
+          && isValidQuestItem(request.resource.data, userId)
+          && request.resource.data.userId == resource.data.userId
+          && request.resource.data.createdAt == resource.data.createdAt;
+        allow delete: if isOwner(userId);
+      }
+
+      match /meals/{mealId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId)
+          && isValidId(mealId)
+          && isValidMealCreation(request.resource.data, userId);
+        allow update: if isOwner(userId)
+          && isValidMealCreation(request.resource.data, userId)
+          && request.resource.data.userId == resource.data.userId
+          && request.resource.data.createdAt == resource.data.createdAt;
+        allow delete: if isOwner(userId);
+      }
+    }
+  }
+}

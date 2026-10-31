@@ -1,0 +1,109 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile, RPG companion progression, and AI Energy allowance wallet",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID" },
+        "displayName": { "type": "string", "description": "User display name" },
+        "email": { "type": "string", "description": "User Google email" },
+        "companionName": { "type": "string", "description": "Name of the 3D AI companion" },
+        "level": { "type": "integer", "description": "Current RPG level" },
+        "xp": { "type": "integer", "description": "Current XP points" },
+        "goldCoins": { "type": "integer", "description": "Accumulated Gold Coins" },
+        "streakDays": { "type": "integer", "description": "Consecutive daily streak" },
+        "moneySavedDollars": { "type": "integer", "description": "Total dollars saved by cooking and mindful choices" },
+        "aiCreditsRemaining": { "type": "integer", "description": "Remaining daily AI allowance credits" },
+        "aiCreditsMax": { "type": "integer", "description": "Maximum daily AI allowance credits" },
+        "isProSubscriber": { "type": "boolean", "description": "Whether the user has unlocked Mochi Pro Pass" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation server timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last update server timestamp" }
+      },
+      "required": [
+        "userId",
+        "displayName",
+        "email",
+        "companionName",
+        "level",
+        "xp",
+        "goldCoins",
+        "streakDays",
+        "moneySavedDollars",
+        "aiCreditsRemaining",
+        "aiCreditsMax",
+        "isProSubscriber",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "QuestItem": {
+      "title": "QuestItem",
+      "description": "A gamified daily micro-quest that rewards XP and Gold Coins",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID" },
+        "title": { "type": "string", "description": "Quest title" },
+        "category": { "type": "string", "enum": ["MEAL", "MIND", "DAY", "WALLET"], "description": "Quest category" },
+        "xpReward": { "type": "integer", "description": "XP awarded on completion" },
+        "coinsReward": { "type": "integer", "description": "Gold Coins awarded on completion" },
+        "isCompleted": { "type": "boolean", "description": "Completion status" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation server timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last update server timestamp" }
+      },
+      "required": [
+        "userId",
+        "title",
+        "category",
+        "xpReward",
+        "coinsReward",
+        "isCompleted",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "MealCreation": {
+      "title": "MealCreation",
+      "description": "A 15-minute fridge/pantry recipe generated or cooked by the user",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID" },
+        "title": { "type": "string", "description": "Recipe title" },
+        "ingredientsUsed": { "type": "string", "description": "Comma-separated ingredients from fridge/pantry" },
+        "prepTimeMinutes": { "type": "integer", "description": "Preparation time in minutes" },
+        "calories": { "type": "integer", "description": "Estimated kcal per serving" },
+        "moneySavedDollars": { "type": "integer", "description": "Estimated dollars saved vs takeout delivery" },
+        "stepsSummary": { "type": "string", "description": "Newline-separated cooking steps" },
+        "isCooked": { "type": "boolean", "description": "Whether the user cooked this meal" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation server timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last update server timestamp" }
+      },
+      "required": [
+        "userId",
+        "title",
+        "ingredientsUsed",
+        "prepTimeMinutes",
+        "calories",
+        "moneySavedDollars",
+        "stepsSummary",
+        "isCooked",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Per-user profile, companion RPG stats, and AI allowance wallet"
+    },
+    "/users/{userId}/quests/{questId}": {
+      "schema": { "$ref": "#/entities/QuestItem" },
+      "description": "Per-user daily quests"
+    },
+    "/users/{userId}/meals/{mealId}": {
+      "schema": { "$ref": "#/entities/MealCreation" },
+      "description": "Per-user fridge/pantry meal creations"
+    }
+  }
+}
