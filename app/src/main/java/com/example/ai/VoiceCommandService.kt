@@ -124,6 +124,8 @@ class VoiceCommandService(
     private var sessionKind: SessionKind? = null
     private var hardErrorCount = 0
     private var wakeLoopSuspended = false
+    /** A Gemini Live call owns the microphone; the recognizer must stay off. */
+    private var liveCallActive = false
 
     private val _isWakeWordEnabled = MutableStateFlow(false)
     val isWakeWordEnabled: StateFlow<Boolean> = _isWakeWordEnabled.asStateFlow()
@@ -351,7 +353,14 @@ class VoiceCommandService(
     }
 
     private fun canUseMic(): Boolean =
-        hosts.isNotEmpty() && hasRecordPermission && !assistantSpeaking
+        hosts.isNotEmpty() && hasRecordPermission && !assistantSpeaking && !liveCallActive
+
+    fun setLiveCallActive(active: Boolean) {
+        runOnMain {
+            liveCallActive = active
+            if (active) cancelSession(destroy = true) else reevaluate(delayMs = WAKE_RESTART_MS)
+        }
+    }
 
     /** Decides whether the passive wake loop should be running, and (re)starts it if so. */
     private fun reevaluate(delayMs: Long = 0L) {

@@ -130,8 +130,8 @@ fun StageScreen(
     onOpenQuests: () -> Unit = onOpenTools,
     onOpenConverter: () -> Unit = onOpenTools,
     onOpenProfile: () -> Unit = {},
-    moodToneLabel: String = "Calm & Balanced",
-    wakeWordEnabled: Boolean = true,
+    moodToneLabel: String = "",
+    wakeWordEnabled: Boolean = false,
     executedOrCancelledTurnIds: Set<String> = emptySet(),
     onCancelTurnAction: (String) -> Unit = {},
     onExecuteTurnActionNow: (CompanionChatTurn) -> Unit = {},
@@ -210,8 +210,9 @@ fun StageScreen(
                 isThinking || runtimeState is CharacterRuntimeState.Thinking -> "Thinking..."
                 isListeningMic || runtimeState is CharacterRuntimeState.Listening -> "Listening..."
                 runtimeState is CharacterRuntimeState.Talking -> "Speaking"
-                wakeWordEnabled -> "\"Hi Mochi\" · $moodToneLabel"
-                else -> moodToneLabel
+                wakeWordEnabled -> "Say \"Hey ${character.displayName.substringAfter(" ")}\""
+                moodToneLabel.isNotBlank() -> moodToneLabel
+                else -> "Tap the mic to talk"
             }
             Row(
                 modifier = Modifier

@@ -348,6 +348,7 @@ fun MochiAppHost(
     val pendingVoiceAction by viewModel.pendingVoiceAction.collectAsStateWithLifecycle()
     val isWakeWordListeningActive by viewModel.isWakeWordListeningActive.collectAsStateWithLifecycle()
     val livePartialTranscript by viewModel.liveVoicePartialTranscript.collectAsStateWithLifecycle()
+    val liveStatus by viewModel.liveStatus.collectAsStateWithLifecycle()
     val libraryEntries by viewModel.libraryEntries.collectAsStateWithLifecycle()
     val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
 
@@ -478,7 +479,8 @@ fun MochiAppHost(
 
     fun onMicTapped() {
         if (hasMic()) {
-            viewModel.voiceCommandService.triggerManualMicSession(hasRecordPermission = true)
+            // Live voice call with Gemini (natural voice, interruptions). Tap again to hang up.
+            viewModel.toggleLiveConversation()
         } else {
             micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
@@ -575,7 +577,7 @@ fun MochiAppHost(
                             onSelectVisualStyle = viewModel::selectVisualStyle,
                             isFloatingCompanionMode = false,
                             onToggleFloatingCompanionMode = { wantsFloat -> if (wantsFloat) launchFloatingCompanion() },
-                            isListening = isWakeWordListeningActive,
+                            isListening = isWakeWordListeningActive || liveStatus != com.example.ai.LiveConversation.Status.IDLE,
                             livePartialTranscript = livePartialTranscript,
                             onMicTap = { onMicTapped() },
                             recentEntry = libraryEntries.firstOrNull(),

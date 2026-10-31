@@ -210,6 +210,7 @@ fun CharacterPickerScreen(
                 val isSelected = selectedCategory == category
                 val chipDisplayLabel = when (category) {
                     CharacterCategoryFilter.ALL -> "All"
+                    CharacterCategoryFilter.EVERYDAY -> "Everyday"
                     CharacterCategoryFilter.MEDICAL -> "Care"
                     CharacterCategoryFilter.CULINARY -> "Kitchen"
                     CharacterCategoryFilter.ANIME -> "Anime"
@@ -525,12 +526,14 @@ fun CharacterPickerScreen(
 }
 
 private fun companionRoleSubtitle(spec: CharacterSpec): String = when (spec) {
+    CharacterSpec.MOCHI -> "Your everyday friend"
     CharacterSpec.ELENA -> "Health and calm"
     CharacterSpec.KAITO -> "Focus and anime"
     CharacterSpec.MARCO -> "Cooking and meals"
 }
 
 private fun companionVoiceSummary(spec: CharacterSpec): String = when (spec) {
+    CharacterSpec.MOCHI -> "Warm, playful"
     CharacterSpec.ELENA -> "Warm, calm"
     CharacterSpec.KAITO -> "Calm, precise"
     CharacterSpec.MARCO -> "Cheerful, Italian"

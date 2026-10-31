@@ -5,6 +5,7 @@ import com.example.ui.theme.MochiTokens
 
 enum class CharacterCategoryFilter(val label: String) {
     ALL("All"),
+    EVERYDAY("Everyday"),
     MEDICAL("Medical"),
     ANIME("Anime"),
     CULINARY("Culinary")
@@ -22,8 +23,26 @@ enum class CharacterSpec(
     val voiceStyle: String,
     val pitch: Float,
     val speechRate: Float,
-    val defaultSuggestions: List<String>
+    val defaultSuggestions: List<String>,
+    /** True when [assetFile] is a real, textured 3D model rendered with Filament. */
+    val isRealtime3D: Boolean = false
 ) {
+    MOCHI(
+        id = "mochi",
+        displayName = "Mochi",
+        category = CharacterCategoryFilter.EVERYDAY,
+        assetFile = "characters/mochi.glb",
+        accent = MochiTokens.accentElena,
+        voiceStyle = "Warm, playful, gentle",
+        pitch = 1.08f,
+        speechRate = 1.0f,
+        defaultSuggestions = listOf(
+            "Help me plan my day",
+            "What's for dinner tonight?",
+            "I need to calm down"
+        ),
+        isRealtime3D = true
+    ),
     ELENA(
         id = "elena",
         displayName = "Nurse Elena",
@@ -72,6 +91,6 @@ enum class CharacterSpec(
 
     companion object {
         fun fromId(id: String): CharacterSpec =
-            entries.firstOrNull { it.id == id } ?: ELENA
+            entries.firstOrNull { it.id == id } ?: MOCHI
     }
 }

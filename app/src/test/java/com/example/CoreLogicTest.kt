@@ -73,6 +73,27 @@ class CoreLogicTest {
         assertEquals("Who should I contact?", (prep as Preparation.Blocked).outcome.spoken)
     }
 
+    // ---- 3D motion ----------------------------------------------------------------------------
+
+    @Test
+    fun `mochi motion reacts to state and speech and stays bounded`() {
+        val m = com.example.ui.character.MochiMotion()
+        repeat(120) { m.step(1f / 60f, 0f) }
+        val idle = m.step(1f / 60f, 0f).copy()
+        assertTrue(kotlin.math.abs(idle.bob) < 0.05f)
+
+        m.setState(com.example.ui.character.CharacterRuntimeState.Talking)
+        repeat(60) { m.step(1f / 60f, 1f) }
+        val talking = m.step(1f / 60f, 1f).copy()
+        assertTrue("squashes while talking", talking.stretchY > idle.stretchY)
+
+        m.setState(com.example.ui.character.CharacterRuntimeState.Reacting("happy"))
+        var maxBob = 0f
+        repeat(60) { maxBob = maxOf(maxBob, m.step(1f / 60f, 0f).bob) }
+        assertTrue("hops when happy", maxBob > 0.05f)
+        assertTrue("never flies away", maxBob < 0.3f)
+    }
+
     // ---- Money ------------------------------------------------------------------------------
 
     @Test

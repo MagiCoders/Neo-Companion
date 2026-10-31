@@ -113,6 +113,10 @@ class CadenceViewModel(
         if (prefs.getInt("settingsSchema", 1) < 2) {
             prefs.edit().putBoolean("wakeWordEnabled", false).putInt("settingsSchema", 2).apply()
         }
+        // v3: Mochi (real 3D model) becomes the default companion once.
+        if (prefs.getInt("settingsSchema", 1) < 3) {
+            prefs.edit().putString("selectedCharacterId", "mochi").putInt("settingsSchema", 3).apply()
+        }
         val defaultPerms = setOf(
             "Microphone",
             "Display over other apps",
@@ -213,7 +217,7 @@ class CadenceViewModel(
     // 3 Launch Characters from CHARACTERS.md
     private val _selectedCharacter = MutableStateFlow(
         CharacterSpec.fromId(
-            prefs.getString("selectedCharacterId", CharacterSpec.ELENA.id) ?: CharacterSpec.ELENA.id
+            prefs.getString("selectedCharacterId", CharacterSpec.MOCHI.id) ?: CharacterSpec.MOCHI.id
         )
     )
     val selectedCharacter: StateFlow<CharacterSpec> = _selectedCharacter.asStateFlow()
@@ -323,6 +327,64 @@ class CadenceViewModel(
         if (outcome !is ActionOutcome.Done) {
             characterController.speakWithLipSync(context, tts, outcome.spoken, _selectedCharacter.value)
         }
+    }
+
+    // --- Live voice (Gemini Live): talk naturally, interrupt, any language ---
+    val liveConversation = com.example.ai.LiveConversation(appContext, viewModelScope, object : com.example.ai.LiveConversation.Callbacks {
+        override fun onUserTranscript(text: String) {
+            _chatHistory.value = _chatHistory.value + CompanionChatTurn(id = UUID.randomUUID().toString(), senderIsUser = true, message = text)
+        }
+
+        override fun onCompanionTranscript(text: String) {
+            _chatHistory.value = _chatHistory.value + CompanionChatTurn(id = UUID.randomUUID().toString(), senderIsUser = false, message = text)
+        }
+
+        override fun onSpeakingChanged(speaking: Boolean, level: Float) {
+            characterController.setLiveSpeaking(speaking, level)
+        }
+
+        override fun onActionReady(turn: CompanionChatTurn, title: String) {
+            when (turn.actionType) {
+                CompanionActionType.NAVIGATE_ROUTE, CompanionActionType.WHATS_PLAYING, CompanionActionType.SPEAK_LOUD ->
+                    executeTurnActionNow(appContext, null, turn)
+                else -> voiceCommandService.scheduleActionWithUndoWindow(turn, durationSeconds = 3, titleOverride = title) {
+                    executeTurnActionNow(appContext, null, it.turn)
+                }
+            }
+        }
+
+        override fun onError(message: String) {
+            reportOutcome(appContext, null, ActionOutcome.Failed(message))
+        }
+    })
+    val liveStatus: StateFlow<com.example.ai.LiveConversation.Status> = liveConversation.status
+
+    /** Mic button: start or end a live voice conversation. */
+    fun toggleLiveConversation() {
+        if (liveConversation.isActive()) {
+            liveConversation.stop()
+            voiceCommandService.setLiveCallActive(false)
+            characterController.transitionTo(CharacterRuntimeState.Idle)
+            return
+        }
+        val uid = _currentUserId.value
+        viewModelScope.launch {
+            val hasCredit = uid == null || _userProfile.value.userId != uid ||
+                runCatching { repository.consumeAiCreditOrThrow(uid, _userProfile.value) }.getOrDefault(true)
+            if (!hasCredit) {
+                reportOutcome(appContext, null, ActionOutcome.Failed("You've used today's AI energy. It refills tomorrow, or you can go Pro in Wallet."))
+                return@launch
+            }
+            voiceCommandService.setLiveCallActive(true)
+            characterController.transitionTo(CharacterRuntimeState.Listening)
+            liveConversation.start(_selectedCharacter.value, _settings.value.userName)
+        }
+    }
+
+    override fun onCleared() {
+        liveConversation.stop()
+        voiceCommandService.setLiveCallActive(false)
+        super.onCleared()
     }
 
     /** Runtime permissions the UI should ask for (e.g. contacts when the user says "call Mom"). */

@@ -74,6 +74,10 @@ fun CharacterStageView(
     /** False when the parent handles taps itself (overlay: tap = listen, long-press = quick ask). */
     handleTaps: Boolean = true
 ) {
+    if (character.isRealtime3D) {
+        Realtime3DStage(character, controller, modifier, showAura, handleTaps, fullBodyStandingMode)
+        return
+    }
     val context = LocalContext.current
     val view = LocalView.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -217,11 +221,70 @@ fun CharacterStageView(
  * Mini 3D Shaded Companion Avatar matching the circular companion head avatar in
  * `Home_7dda243e.png`, `Home_-_talking_and_acting_3e6b4a2f.png`, and `Driving_mode_dc3d4f06.png`.
  */
+/** The 3D companion with its floor shadow, aura and reaction effects. */
+@Composable
+private fun Realtime3DStage(
+    character: CharacterSpec,
+    controller: CharacterController,
+    modifier: Modifier,
+    showAura: Boolean,
+    handleTaps: Boolean,
+    fullBodyStandingMode: Boolean
+) {
+    val view = LocalView.current
+    val pose by controller.pose.collectAsStateWithLifecycle()
+    val runtimeState by controller.state.collectAsStateWithLifecycle()
+    val phase by rememberInfiniteTransition(label = "aura").animateFloat(
+        initialValue = 0f,
+        targetValue = (2.0 * PI).toFloat(),
+        animationSpec = infiniteRepeatable(tween(3600, easing = LinearEasing), RepeatMode.Restart),
+        label = "aura_phase"
+    )
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .testTag("character_stage_${character.id}")
+            .pointerInput(handleTaps) {
+                if (!handleTaps) return@pointerInput
+                detectTapGestures(
+                    onTap = {
+                        view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                        controller.react("wave")
+                    },
+                    onDoubleTap = {
+                        view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+                        controller.react("happy")
+                    }
+                )
+            }
+    ) {
+        Canvas(Modifier.fillMaxSize()) {
+            renderCharacterRimAndGroundShadow(runtimeState, pose, character.accent, phase, fullBodyStandingMode, showAura)
+        }
+        Mochi3DView(assetPath = character.assetFile, controller = controller, modifier = Modifier.fillMaxSize())
+        CompanionVfxLayer(state = runtimeState, accent = character.accent, micLevel = pose.micLevel, modifier = Modifier.fillMaxSize())
+    }
+}
+
 @Composable
 fun MiniCompanion3DAvatar(
     character: CharacterSpec,
     modifier: Modifier = Modifier
 ) {
+    if (character.isRealtime3D) {
+        // A tiny flat Mochi face: cheap to draw in a 36 dp avatar (no second 3D engine).
+        Canvas(modifier = modifier.clip(CircleShape)) {
+            val r = size.minDimension / 2f
+            val c = Offset(size.width / 2f, size.height / 2f)
+            drawCircle(character.accent.copy(alpha = 0.22f), r, c)
+            drawOval(Color(0xFFF7F4EE), topLeft = Offset(c.x - r * 0.72f, c.y - r * 0.55f), size = Size(r * 1.44f, r * 1.2f))
+            drawCircle(Color(0xFF1B1D22), r * 0.11f, Offset(c.x - r * 0.26f, c.y - r * 0.02f))
+            drawCircle(Color(0xFF1B1D22), r * 0.11f, Offset(c.x + r * 0.26f, c.y - r * 0.02f))
+            drawCircle(Color(0xFFF4A6A6).copy(alpha = 0.7f), r * 0.09f, Offset(c.x - r * 0.45f, c.y + r * 0.16f))
+            drawCircle(Color(0xFFF4A6A6).copy(alpha = 0.7f), r * 0.09f, Offset(c.x + r * 0.45f, c.y + r * 0.16f))
+        }
+        return
+    }
     Box(modifier = modifier.clip(CircleShape)) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             val w = size.width
@@ -239,7 +302,7 @@ fun MiniCompanion3DAvatar(
 
             // Hair / Hat behind head
             when (character) {
-                CharacterSpec.ELENA -> {
+                CharacterSpec.ELENA, CharacterSpec.MOCHI -> {
                     // Top bun
                     drawCircle(
                         brush = Brush.radialGradient(
@@ -451,7 +514,7 @@ private fun DrawScope.renderSculpted3DBustCompanion(
 
     // 1. Hair / Crown behind head & neck
     when (character) {
-        CharacterSpec.ELENA -> {
+        CharacterSpec.ELENA, CharacterSpec.MOCHI -> {
             // Sculpted 3D Top Bun (`Home_7dda243e.png`)
             val bunCenter = Offset(cx - touchYawPx * 0.25f, headCenterY - headRy * 1.10f)
             val bunR = headRx * 0.34f
@@ -566,7 +629,7 @@ private fun DrawScope.renderSculpted3DBustCompanion(
     }
 
     val torsoColors = when (character) {
-        CharacterSpec.ELENA -> listOf(
+        CharacterSpec.ELENA, CharacterSpec.MOCHI -> listOf(
             Color(0xFFF2F3F5),
             Color(0xFFCFD2D6),
             Color(0xFF8A8E94),
@@ -597,7 +660,7 @@ private fun DrawScope.renderSculpted3DBustCompanion(
 
     // Collar / Coat detail on torso
     when (character) {
-        CharacterSpec.ELENA, CharacterSpec.KAITO -> {
+        CharacterSpec.ELENA, CharacterSpec.KAITO, CharacterSpec.MOCHI -> {
             // Crisp V-neck collar lines (`Home_7dda243e.png`)
             val vNeckPath = Path().apply {
                 moveTo(cx - neckWidth * 0.55f, shoulderTopY + 2f)
@@ -660,7 +723,7 @@ private fun DrawScope.renderSculpted3DBustCompanion(
     }
 
     val skinPalette = when (character) {
-        CharacterSpec.ELENA -> listOf(
+        CharacterSpec.ELENA, CharacterSpec.MOCHI -> listOf(
             Color(0xFFF6E3CE),
             Color(0xFFD6BA9E),
             Color(0xFF9E826B),
@@ -692,7 +755,7 @@ private fun DrawScope.renderSculpted3DBustCompanion(
     // Hair / Hat Band overlapping forehead inside the head silhouette
     clipPath(headPath) {
         when (character) {
-            CharacterSpec.ELENA -> {
+            CharacterSpec.ELENA, CharacterSpec.MOCHI -> {
                 // Curved parted brown hair cap (`Home_7dda243e.png`)
                 val hairCapPath = Path().apply {
                     moveTo(headRect.left - headRx * 0.2f, headCenterY + headRy * 0.06f)
@@ -818,7 +881,7 @@ private fun DrawScope.renderFullBody3DCompanion(
 
     // 1. Hair / Top Bun or Hat
     when (character) {
-        CharacterSpec.ELENA -> {
+        CharacterSpec.ELENA, CharacterSpec.MOCHI -> {
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(Color(0xFF694732), Color(0xFF281910)),

@@ -106,6 +106,10 @@ dependencies {
   implementation(libs.androidx.compose.material.icons.core)
   implementation(libs.androidx.compose.material.icons.extended)
   implementation(libs.androidx.compose.material3)
+  // Real-time 3D for the companion (Google Filament + glTF loader)
+  // Pure-Java artifacts; their declared kotlin-stdlib 2.4 would clash with this project's Kotlin.
+  implementation(libs.filament.android) { exclude(group = "org.jetbrains.kotlin") }
+  implementation(libs.filament.gltfio) { exclude(group = "org.jetbrains.kotlin") }
   implementation(libs.androidx.compose.ui)
   implementation(libs.androidx.compose.ui.graphics)
   implementation(libs.androidx.compose.ui.tooling.preview)
@@ -120,6 +124,8 @@ dependencies {
   // implementation(libs.coil.compose)
   // implementation(libs.converter.moshi)
   implementation(libs.firebase.ai)
+  // JSON types used by Gemini Live function calling (same version firebase-ai brings in)
+  implementation(libs.kotlinx.serialization.json)
   // Uncomment to use Firestore:
   implementation(libs.firebase.firestore)
 

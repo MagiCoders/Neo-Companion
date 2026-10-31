@@ -61,6 +61,8 @@ class ScreenshotTest(private val light: Boolean) {
     private val controller = CharacterController(CoroutineScope(Dispatchers.Main))
 
     private fun shot(name: String, withNav: MochiMainTab? = null, content: @Composable () -> Unit) {
+        // The companion's effects animate forever; drive the clock by hand so the test can settle.
+        compose.mainClock.autoAdvance = false
         compose.setContent {
             MochiTheme(
                 characterAccent = CharacterSpec.ELENA.accent,
@@ -78,7 +80,7 @@ class ScreenshotTest(private val light: Boolean) {
 
     @Test fun home() = shot("01_home", MochiMainTab.HOME) {
         StageScreen(
-            character = CharacterSpec.ELENA, controller = controller, chatHistory = emptyList(),
+            character = CharacterSpec.MOCHI, controller = controller, chatHistory = emptyList(),
             isThinking = false, showConversationSheet = false, onToggleConversationSheet = {},
             onSendMessage = {}, onOpenCharacterPicker = {}, onOpenTools = {}
         )

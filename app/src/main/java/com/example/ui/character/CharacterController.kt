@@ -127,6 +127,21 @@ class CharacterController(
         }
     }
 
+    @Volatile
+    private var liveSpeaking = false
+
+    /** Driven by the live voice call's real output level (0..1). */
+    fun setLiveSpeaking(speaking: Boolean, level: Float) {
+        targetSpeechRms = if (speaking) level.coerceIn(0f, 1f) else 0f
+        if (speaking != liveSpeaking) {
+            liveSpeaking = speaking
+            scope.launch(Dispatchers.Main) {
+                if (speaking) transitionTo(CharacterRuntimeState.Talking)
+                else if (_state.value is CharacterRuntimeState.Talking) transitionTo(CharacterRuntimeState.Listening)
+            }
+        }
+    }
+
     fun setRenderingPaused(paused: Boolean) {
         isPaused = paused
     }

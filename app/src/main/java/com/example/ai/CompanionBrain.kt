@@ -24,6 +24,8 @@ object AiModels {
     const val CHAT = "gemini-3.6-flash"
     /** Cheap, fast vision/extraction jobs (fridge photos, receipts, OCR). */
     const val VISION_FAST = "gemini-3.5-flash-lite"
+    /** Real-time voice conversation (Gemini Live, native audio; Developer API preview). */
+    const val LIVE = "gemini-3.1-flash-live-preview"
 }
 
 /** Thrown when the AI can't answer; the UI shows an honest error instead of a made-up reply. */

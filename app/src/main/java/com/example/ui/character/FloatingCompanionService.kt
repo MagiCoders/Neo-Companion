@@ -161,7 +161,7 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
 
         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         lightTheme = !prefs.getBoolean("isDarkTheme", true)
-        activeCharacter = CharacterSpec.fromId(prefs.getString("selectedCharacterId", null) ?: CharacterSpec.ELENA.id)
+        activeCharacter = CharacterSpec.fromId(prefs.getString("selectedCharacterId", null) ?: CharacterSpec.MOCHI.id)
 
         startForegroundCompat()
 
@@ -365,7 +365,8 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
         val wm = windowManager ?: return
         val view = composeView ?: return
         val lp = layoutParams ?: return
-        val base = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        val base = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+            WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
         val newFlags = if (focusable) base else base or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
         if (lp.flags != newFlags) {
             lp.flags = newFlags
@@ -394,7 +395,8 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
             overlayType,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED, // required for the 3D TextureView
             PixelFormat.TRANSLUCENT
         ).apply {
             // Anchored to the bottom edge so the bubble grows upward and she never jumps.
@@ -569,7 +571,7 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
             val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             if (!prefs.getBoolean("floatingCompanionEnabled", true)) return false
             if (!Settings.canDrawOverlays(context)) return false
-            val character = CharacterSpec.fromId(prefs.getString("selectedCharacterId", null) ?: CharacterSpec.ELENA.id)
+            val character = CharacterSpec.fromId(prefs.getString("selectedCharacterId", null) ?: CharacterSpec.MOCHI.id)
             return startOrRequestSystemOverlay(context, character, lastMessage = null)
         }
 
@@ -586,8 +588,8 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
 // Overlay UI
 // ----------------------------------------------------------------------------------------------
 
-private val OverlayCharacterWidth = 116.dp
-private val OverlayCharacterHeight = 172.dp
+private val OverlayCharacterWidth = 150.dp
+private val OverlayCharacterHeight = 150.dp
 
 @Composable
 private fun OverlayContent(
