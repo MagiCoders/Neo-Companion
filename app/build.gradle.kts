@@ -17,8 +17,8 @@ android {
     applicationId = "com.aistudio.cadence.mxkprz"
     minSdk = 24
     targetSdk = 36
-    versionCode = 11
-    versionName = "2.0"
+    versionCode = 12
+    versionName = "2.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -64,6 +64,8 @@ android {
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_11
     targetCompatibility = JavaVersion.VERSION_11
+    // java.time (alarms, dates) on Android 7.x too.
+    isCoreLibraryDesugaringEnabled = true
   }
   buildFeatures {
     compose = true
@@ -115,6 +117,7 @@ dependencies {
   implementation(libs.filament.gltfio) { exclude(group = "org.jetbrains.kotlin") }
   // Offline wake word ("Hey Mochi"): listens quietly with no recognizer restarts or beeps.
   implementation(libs.vosk.android)
+  coreLibraryDesugaring(libs.desugar.jdk.libs)
   implementation(libs.androidx.compose.ui)
   implementation(libs.androidx.compose.ui.graphics)
   implementation(libs.androidx.compose.ui.tooling.preview)

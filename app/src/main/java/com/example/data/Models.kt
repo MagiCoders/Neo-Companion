@@ -36,7 +36,10 @@ enum class CompanionActionType(
     SET_VOICE_LANGUAGE("Change voice language", "🗣️", "MochiLife · language"),
     OPEN_APP("Open an app", "📱", "Apps · open"),
     WHATSAPP_VIDEO_CALL("WhatsApp video call", "📹", "WhatsApp · video call"),
-    WHATSAPP_SEND_MEDIA("Send a photo, video or file", "📎", "WhatsApp · attachment")
+    WHATSAPP_SEND_MEDIA("Send a photo, video or file", "📎", "WhatsApp · attachment"),
+    SET_ALARM("Set an alarm", "⏰", "Clock · alarm"),
+    SET_TIMER("Set a timer", "⏲️", "Clock · timer"),
+    SHOW_ALARMS("Show alarms", "⏰", "Clock · alarms")
 }
 
 object MochiHashRoutes {

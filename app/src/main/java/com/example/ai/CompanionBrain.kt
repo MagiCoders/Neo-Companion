@@ -104,8 +104,10 @@ class CompanionBrain {
         }
         val prompt = buildString {
             appendLine("Companion: ${companion.displayName} — personality: ${companion.voiceStyle}.")
+            appendLine("Now: " + java.text.SimpleDateFormat("EEEE yyyy-MM-dd HH:mm", java.util.Locale.ENGLISH).format(java.util.Date()) + " (user's local time).")
             if (userName.isNotBlank()) appendLine("The user's name: ${PromptSafety.quote(userName)}.")
             if (preferredLanguage.isNotBlank()) {
+                DIALECT_HINTS.entries.firstOrNull { preferredLanguage.contains(it.key) }?.let { appendLine(it.value) }
                 appendLine("The user's chosen language: $preferredLanguage. When you reply in it, use that country's natural " +
                     "everyday dialect (e.g. Iraqi Arabic for Arabic (Iraq)), not formal Modern Standard Arabic. " +
                     "Reply in the language of the message; " +
@@ -185,6 +187,14 @@ class CompanionBrain {
     }
 
     companion object {
+        /** Keeps replies in one consistent variety instead of a mix. */
+        private val DIALECT_HINTS = mapOf(
+            "Arabic (Iraq)" to "Write ONLY in Iraqi Arabic (e.g. شلونك، هسه، اكو، ماكو، زين، شكو، هواية، شنو), never Egyptian or Gulf words.",
+            "Arabic (Egypt)" to "Write ONLY in Egyptian Arabic (e.g. إزيك، دلوقتي، عايز، كده).",
+            "Arabic (Saudi Arabia)" to "Write ONLY in Saudi/Gulf Arabic (e.g. وشلونك، الحين، أبغى، زين).",
+            "Arabic (United Arab Emirates)" to "Write ONLY in Emirati/Gulf Arabic (e.g. شحالك، الحين، أبا، زين).",
+            "Persian" to "Write ONLY in natural spoken Persian (Farsi) with Persian words, not Arabic words or Arabic grammar."
+        )
         /** Failures the other model can't fix either. */
         private val NO_FALLBACK = setOf(
             AiDiagnostics.Reason.NETWORK, AiDiagnostics.Reason.TIMEOUT, AiDiagnostics.Reason.APP_CHECK,
@@ -207,6 +217,10 @@ class CompanionBrain {
             - WHATSAPP_READ_CHAT: open someone's WhatsApp chat. TELEGRAM: open someone in Telegram.
             - YOUTUBE: play or find something on YouTube; actionPayload = what to play ("play Shape of You" → "Shape of You").
               "open YouTube" alone → empty payload. The app finds and plays the exact video.
+            - SET_ALARM: actionPayload = JSON {"hour":0-23,"minute":0-59,"days":["mon",…] for repeating (empty for once),
+              "date":"YYYY-MM-DD" only for a specific day, "label":"…"}. Work out the exact time from "Now" in the message
+              ("tomorrow 9 pm" → hour 21 + tomorrow's date; "every weekday at 6:30" → days mon–fri).
+            - SET_TIMER: actionPayload = JSON {"seconds":N,"label":"…"} ("10 minutes" → 600). SHOW_ALARMS: show the alarms.
             - WHATSAPP_VIDEO_CALL: WhatsApp video call (actionRecipient = the person).
             - WHATSAPP_SEND_MEDIA: send someone a photo, video or file on WhatsApp (actionRecipient = the person,
               actionPayload = "photo", "video" or "file"). The user picks it on the phone.

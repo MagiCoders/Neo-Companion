@@ -5,6 +5,6 @@
     <string name="tab_fridge">Fridge Chef</string>
     <string name="tab_quests">Quests</string>
     <string name="tab_wallet">Wallet &amp; Pro</string>
-    <string name="whatsapp_helper_description">Lets MochiLife tap Send, play a voice note or start a call in WhatsApp — only right after you ask your companion to and the 3-second countdown ends. It runs one fixed step, does not read or store your chats, and does nothing otherwise.</string>
-    <string name="whatsapp_helper_label">MochiLife WhatsApp helper</string>
+    <string name="whatsapp_helper_description">Lets MochiLife tap Send, play a voice note or start a call in WhatsApp, or tap the first video in YouTube search results — only right after you ask your companion to. It runs one fixed step, does not read or store your chats or screen, and does nothing otherwise.</string>
+    <string name="whatsapp_helper_label">MochiLife helper (WhatsApp &amp; YouTube)</string>
 </resources>

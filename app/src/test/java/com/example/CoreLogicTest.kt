@@ -196,6 +196,34 @@ class CoreLogicTest {
     }
 
     @Test
+    fun `names match by spelling and sound across scripts`() {
+        val n = com.example.actions.NameMatcher
+        assertTrue(n.score("Ali Odeh", "Ali Odeh") >= 0.99)
+        assertTrue(n.score("ali oudeh", "Ali Odeh") >= 0.78)
+        assertTrue(n.score("علي اوديت", "Ali Odeh") > n.score("علي اوديت", "Ali Hassan"))
+        assertTrue(n.score("Ali audits", "Ali Odeh") > n.score("Ali audits", "Ali Hassan"))
+        assertTrue(n.score("Fatemeh", "Fatima") > n.score("Fatemeh", "Farah"))
+        assertTrue(n.score("Sara", "Mahmoud Omar") < 0.55)
+        assertEquals(n.skeleton("odeh"), n.skeleton("عوده"))
+    }
+
+    @Test
+    fun `alarms are understood from the AI's time spec`() {
+        val a = com.example.actions.AlarmActions
+        val spec = a.parseAlarm("""{"hour":21,"minute":0,"days":["Mon","tuesday","wed","thu","fri"],"label":"Gym"}""")!!
+        assertEquals(21, spec.hour)
+        assertEquals("on weekdays", a.describeDays(spec.days))
+        assertEquals("Gym", spec.label)
+        assertNull(a.parseAlarm("""{"hour":25}"""))
+        assertNull(a.parseAlarm("not json"))
+        val evening = java.time.LocalDateTime.of(2026, 11, 1, 22, 0)
+        assertEquals(java.time.LocalDate.of(2026, 11, 2), a.nextRingDate(21, 0, evening))   // 9 pm already passed → tomorrow
+        assertEquals(java.time.LocalDate.of(2026, 11, 1), a.nextRingDate(23, 0, evening))
+        assertEquals("1 hour 30 minutes", a.describeDuration(5400))
+        assertEquals("every day", a.describeDays(java.time.DayOfWeek.entries.toList()))
+    }
+
+    @Test
     fun `goodbye ends a conversation in several languages`() {
         val g = com.example.ai.VoiceCommandService.GOODBYE_REGEX
         listOf("ok bye", "that's all thanks", "good night Elsa", "خلاص", "مع السلامة", "خداحافظ").forEach { assertTrue(it, g.containsMatchIn(it)) }

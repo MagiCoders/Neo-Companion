@@ -23,7 +23,7 @@ import android.view.accessibility.AccessibilityNodeInfo
  */
 class WhatsAppHelper : AccessibilityService() {
 
-    enum class Task { SendPrefilled, PlayLatestVoiceNote, VoiceCall, VideoCall }
+    enum class Task { SendPrefilled, PlayLatestVoiceNote, VoiceCall, VideoCall, PlayFirstYouTubeResult }
 
     override fun onServiceConnected() {
         instance = this
@@ -40,9 +40,14 @@ class WhatsAppHelper : AccessibilityService() {
         val task = pending ?: return
         if (System.currentTimeMillis() - requestedAt > TASK_TTL_MS) { pending = null; return }
         val pkg = event?.packageName?.toString() ?: return
-        if (pkg != ActionExecutor.WHATSAPP && pkg != ActionExecutor.WHATSAPP_BUSINESS) return
         val root = rootInActiveWindow ?: return
+        if (task == Task.PlayFirstYouTubeResult) {
+            if (pkg == AppLauncher.YOUTUBE && clickFirstVideo(root)) pending = null
+            return
+        }
+        if (pkg != ActionExecutor.WHATSAPP && pkg != ActionExecutor.WHATSAPP_BUSINESS) return
         val done = when (task) {
+            Task.PlayFirstYouTubeResult -> false
             // "send" in a chat; "send" / "send_button" on the media preview screen.
             Task.SendPrefilled -> clickFirst(root, pkg, listOf("send", "send_button"), listOf("Send"))
             Task.PlayLatestVoiceNote -> clickLast(root, pkg, listOf("control_btn", "voice_note_btn", "play_button"), listOf("Play", "Play voice message"))
@@ -50,6 +55,27 @@ class WhatsAppHelper : AccessibilityService() {
             Task.VideoCall -> clickFirst(root, pkg, listOf("menuitem_video_call", "video_call_btn"), listOf("Video call"))
         }
         if (done) pending = null
+    }
+
+    /**
+     * The first real video in YouTube's search results (not an ad, not a Short): its description
+     * reads like "Title - 3 minutes, 20 seconds - Go to channel - … views - 2 years ago - play video".
+     */
+    private fun clickFirstVideo(root: AccessibilityNodeInfo): Boolean {
+        val queue = ArrayDeque<AccessibilityNodeInfo>().apply { add(root) }
+        var visited = 0
+        while (queue.isNotEmpty() && visited < 600) {
+            val node = queue.removeFirst()
+            visited++
+            val desc = node.contentDescription?.toString().orEmpty()
+            val lower = desc.lowercase()
+            val looksLikeVideo = desc.length > 20 && node.isVisibleToUser &&
+                (lower.contains("play video") || (lower.contains(" views") && (lower.contains("minute") || lower.contains("second") || lower.contains("hour")))) &&
+                !lower.contains("sponsored") && !lower.contains("shorts") && !lower.startsWith("ad ")
+            if (looksLikeVideo && click(node)) return true
+            for (i in 0 until node.childCount) node.getChild(i)?.let { queue.addLast(it) }
+        }
+        return false
     }
 
     private fun clickFirst(root: AccessibilityNodeInfo, pkg: String, ids: List<String>, descs: List<String>): Boolean =
@@ -72,7 +98,7 @@ class WhatsAppHelper : AccessibilityService() {
     }
 
     companion object {
-        private const val TASK_TTL_MS = 12_000L
+        private const val TASK_TTL_MS = 15_000L
         @Volatile private var instance: WhatsAppHelper? = null
         @Volatile private var pending: Task? = null
         @Volatile private var requestedAt = 0L

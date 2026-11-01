@@ -2,6 +2,20 @@
 
 Every update gets a new version. Check yours in **Settings** (bottom of the screen): `MochiLife <version> (build <code>)`.
 
+## 2.1 (build 12)
+- **Calling the right person**:
+  - "my mother" no longer lists five random people. Words like "ma", "أم" used to match inside other names ("Mahmoud", "Omar"); now only a whole word of the name or a contact nickname counts. Tip: give her contact the nickname "Mom" or "أمي".
+  - Names are matched by spelling and by sound, across English and Arabic letters ("Ali audits" or "علي اوديت" → "Ali Odeh"), and a clear winner is called without asking.
+  - The speech recogniser is given your contact and app names to favour (Android 13+).
+  - If a quick on-phone command can't find the person for sure, the AI is asked once for other spellings before she asks you to choose.
+- **YouTube**: if the YouTube search service is unavailable, the chat now says exactly why, and with the helper on (now "MochiLife helper (WhatsApp & YouTube)") she taps the first real video in the results so it plays. Re-enable the helper once after updating so Android picks up YouTube.
+- **Alarms and timers**: "wake me up at 6:30 every weekday", "set an alarm tomorrow at 9 pm called Gym", "timer 10 minutes", "show my alarms". Set silently in your Clock app. A specific date further away becomes a calendar reminder, because the Clock app only knows times and weekdays.
+- **Languages**:
+  - "Speak Arabic" keeps your Arabic dialect (Iraqi stays Iraqi).
+  - Replies stick to one dialect (Iraqi/Egyptian/Gulf) and Persian replies use Persian words, not Arabic.
+  - If your phone has no voice for a language (common for Persian), she tells you once and opens the voice download screen instead of reading it with an Arabic voice.
+- The AI now knows the current date and time.
+
 ## 2.0 (build 11)
 - **Everyday commands without AI** (instant, no AI quota): "call X", "call X on WhatsApp", "video call X", "play X on YouTube", "open X", "read my messages", "what time is it", in English, Arabic and Persian (e.g. "اتصل بعلي على الواتساب", "شغللي فيروز على اليوتيوب", "به مامان زنگ بزن"). Multi-step requests still go to the AI. The voice log shows "Understood on the phone (no AI used)".
 - **Plays the actual YouTube video**: finds it with YouTube's free search service (not Gemini). If the top result clearly matches, it plays; if not, she reads the top 4 and you answer "the second one" / "الثاني" / "دومی" (or "none"). Needs "YouTube Data API v3" enabled once in Google Cloud. Settings → Diagnostics → Run check tells you if it's working; until then she opens a YouTube search as before.

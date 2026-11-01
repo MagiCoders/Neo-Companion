@@ -43,6 +43,11 @@ class ContactResolver(private val context: Context) {
         ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) ==
             PackageManager.PERMISSION_GRANTED
 
+    /** One contact in the quick index used for matching (no phone numbers loaded yet). */
+    private data class Entry(val id: Long, val name: String, val nicknames: List<String>, val starred: Boolean)
+
+    private val index: List<Entry> by lazy { loadIndex() }
+
     /**
      * @param alternates other spellings of the same name ("Ali Odeh" for "علي اوديت"), tried too,
      * so a name said in Arabic finds a contact saved in English and the other way round.
@@ -54,66 +59,75 @@ class ContactResolver(private val context: Context) {
         if (!hasPermission()) return ContactLookup.NoPermission
 
         val spellings = (listOf(query) + alternates.map { it.trim() }.filter { it.isNotEmpty() }).distinct()
-        val terms = spellings.flatMap { listOf(it) + RelationshipAliases.expand(it) }.distinct()
-        var all = loadContactsMatching(terms)
-        if (all.isEmpty()) {
-            // No full-name match: try first names ("Ali"), closest spelling first; several → the
-            // user picks, which is better than "not found" for a name heard slightly wrong.
-            val firstNames = spellings.mapNotNull { it.split(Regex("\\s+")).firstOrNull()?.takeIf { f -> f.length >= 2 } }.distinct()
-            all = loadContactsMatching(firstNames).sortedBy { c ->
-                spellings.minOf { com.example.ai.WakeVocabulary.levenshtein(normalize(c.displayName), normalize(it)) }
+        val relation = spellings.flatMap { RelationshipAliases.expand(it) }.map(::normalize).toSet()
+        val ranked: List<Pair<Entry, Double>> = if (relation.isNotEmpty()) {
+            // "Mom", "أمي", "مامان": only a whole word of the name or a nickname counts, never a
+            // piece of a longer name ("ma" must not match "Mahmoud").
+            index.mapNotNull { e ->
+                val names = listOf(e.name) + e.nicknames
+                when {
+                    names.any { normalize(it) in relation } -> e to 1.0
+                    names.any { n -> NameMatcher.tokens(n).any { it in relation } } -> e to 0.9
+                    else -> null
+                }
             }
-            if (all.isEmpty()) return ContactLookup.NotFound(query)
-            val ranked = all.filter { it.phones.isNotEmpty() }
-            return when (ranked.size) {
-                0 -> ContactLookup.NotFound(query)
-                1 -> ContactLookup.Found(ranked.first())
-                else -> ContactLookup.Ambiguous(query, ranked.take(5))
-            }
+        } else {
+            index.map { e -> e to spellings.maxOf { s -> (listOf(e.name) + e.nicknames).maxOf { NameMatcher.score(s, it) } } }
+                .filter { it.second >= MIN_SCORE }
+        }.sortedWith(compareByDescending<Pair<Entry, Double>> { it.second }.thenByDescending { it.first.starred })
+
+        if (ranked.isEmpty()) return ContactLookup.NotFound(query)
+        val top = ranked.first()
+        val second = ranked.getOrNull(1)?.second ?: 0.0
+        val clearWinner = (top.second >= 0.97 && second < 0.97) ||
+            (top.second >= CONFIDENT && top.second - second >= MARGIN) ||
+            ranked.size == 1 && top.second >= CONFIDENT
+        if (clearWinner) {
+            loadContact(top.first.id)?.takeIf { it.phones.isNotEmpty() }?.let { return ContactLookup.Found(it) }
         }
-
-        val aliasNorms = terms.map(::normalize).toSet()
-        val exact = all.filter { normalize(it.displayName) in aliasNorms }
-        val ranked = when {
-            exact.isNotEmpty() -> exact
-            else -> {
-                val starts = all.filter { c -> aliasNorms.any { normalize(c.displayName).startsWith(it) } }
-                starts.ifEmpty { all.filter { c -> aliasNorms.any { normalize(c.displayName).contains(it) } }.ifEmpty { all } }
-            }
-        }.filter { it.phones.isNotEmpty() }
-
-        return when (ranked.size) {
+        val options = ranked.filter { it.second >= maxOf(MIN_SCORE, top.second - 0.25) }.take(5)
+            .mapNotNull { loadContact(it.first.id) }.filter { it.phones.isNotEmpty() }
+        return when (options.size) {
             0 -> ContactLookup.NotFound(query)
-            1 -> ContactLookup.Found(ranked.first())
-            else -> ContactLookup.Ambiguous(query, ranked.take(5))
+            1 -> ContactLookup.Found(options.first())
+            else -> ContactLookup.Ambiguous(query, options)
         }
     }
 
-    private fun loadContactsMatching(terms: List<String>): List<PhoneContact> {
-        val resolver = context.contentResolver
-        val ids = linkedSetOf<Long>()
+    /** Names for the speech recogniser to favour (favourites first). */
+    fun namesForRecognition(limit: Int = 300): List<String> =
+        if (!hasPermission()) emptyList()
+        else index.sortedByDescending { it.starred }.flatMap { listOf(it.name) + it.nicknames }.distinct().take(limit)
 
-        // 1) Display names.
-        for (term in terms) {
-            resolver.query(
-                ContactsContract.Contacts.CONTENT_URI,
-                arrayOf(ContactsContract.Contacts._ID),
-                "${ContactsContract.Contacts.DISPLAY_NAME_PRIMARY} LIKE ? AND ${ContactsContract.Contacts.HAS_PHONE_NUMBER} = 1",
-                arrayOf("%${escapeLike(term)}%"),
-                null
-            )?.use { c -> while (c.moveToNext()) ids += c.getLong(0) }
-        }
-        // 2) Nicknames.
-        for (term in terms) {
+    private fun loadIndex(): List<Entry> {
+        val resolver = context.contentResolver
+        val nicknames = HashMap<Long, MutableList<String>>()
+        try {
             resolver.query(
                 ContactsContract.Data.CONTENT_URI,
-                arrayOf(ContactsContract.Data.CONTACT_ID),
-                "${ContactsContract.Data.MIMETYPE} = ? AND ${ContactsContract.CommonDataKinds.Nickname.NAME} LIKE ?",
-                arrayOf(ContactsContract.CommonDataKinds.Nickname.CONTENT_ITEM_TYPE, "%${escapeLike(term)}%"),
+                arrayOf(ContactsContract.Data.CONTACT_ID, ContactsContract.CommonDataKinds.Nickname.NAME),
+                "${ContactsContract.Data.MIMETYPE} = ?",
+                arrayOf(ContactsContract.CommonDataKinds.Nickname.CONTENT_ITEM_TYPE),
                 null
-            )?.use { c -> while (c.moveToNext()) ids += c.getLong(0) }
-        }
-        return ids.take(25).mapNotNull(::loadContact)
+            )?.use { c -> while (c.moveToNext()) c.getString(1)?.let { nicknames.getOrPut(c.getLong(0)) { mutableListOf() } += it } }
+        } catch (_: Exception) {}
+        val out = ArrayList<Entry>()
+        try {
+            resolver.query(
+                ContactsContract.Contacts.CONTENT_URI,
+                arrayOf(ContactsContract.Contacts._ID, ContactsContract.Contacts.DISPLAY_NAME_PRIMARY, ContactsContract.Contacts.STARRED),
+                "${ContactsContract.Contacts.HAS_PHONE_NUMBER} = 1",
+                null,
+                null
+            )?.use { c ->
+                while (c.moveToNext()) {
+                    val name = c.getString(1) ?: continue
+                    val id = c.getLong(0)
+                    out += Entry(id, name, nicknames[id].orEmpty(), c.getInt(2) == 1)
+                }
+            }
+        } catch (_: Exception) {}
+        return out
     }
 
     private fun loadContact(contactId: Long): PhoneContact? {
@@ -156,11 +170,15 @@ class ContactResolver(private val context: Context) {
 
     fun dataUri(dataId: Long): Uri = ContentUris.withAppendedId(ContactsContract.Data.CONTENT_URI, dataId)
 
-    private fun escapeLike(s: String) = s.replace("%", "").replace("_", "")
 
     companion object {
         const val WHATSAPP_VOIP_CALL_MIME = "vnd.android.cursor.item/vnd.com.whatsapp.voip.call"
         const val WHATSAPP_VIDEO_CALL_MIME = "vnd.android.cursor.item/vnd.com.whatsapp.video.call"
+        /** Below this a contact isn't offered at all. */
+        private const val MIN_SCORE = 0.55
+        /** At or above this, with a clear lead, the contact is used without asking. */
+        private const val CONFIDENT = 0.78
+        private const val MARGIN = 0.12
 
         fun normalize(s: String): String =
             Normalizer.normalize(s.lowercase(Locale.ROOT), Normalizer.Form.NFKD)

@@ -53,6 +53,8 @@ class AppLauncher(private val context: Context) {
         if (!isInstalled(YOUTUBE)) return openInPlayStore(YOUTUBE, "YouTube")
         val q = query.trim()
         if (q.isEmpty()) return launchPackage(YOUTUBE, "YouTube")
+        // With the helper on, the first video in the results is tapped so it actually plays.
+        if (WhatsAppHelper.isEnabled(context)) WhatsAppHelper.request(WhatsAppHelper.Task.PlayFirstYouTubeResult)
         val search = Intent(Intent.ACTION_SEARCH).setPackage(YOUTUBE).putExtra(SearchManager.QUERY, q)
         if (start(search)) return Result.Opened("YouTube")
         val results = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=${Uri.encode(q)}")).setPackage(YOUTUBE)

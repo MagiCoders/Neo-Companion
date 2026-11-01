@@ -376,6 +376,13 @@ class VoiceCommandService(
         get() = "Listening for: " + wakeMatcher.variants.joinToString(" / ") { it.joinToString(" ") } +
             "\nMicrophone clean-up: " + wakeEngine.lastAudioEffects
 
+    /** Contact and app names the recogniser should favour ("Ali Odeh", not "Ali audits"). */
+    @Volatile private var biasingStrings: ArrayList<String> = arrayListOf()
+
+    fun setBiasingStrings(names: List<String>) {
+        biasingStrings = ArrayList(names.map { it.trim() }.filter { it.isNotEmpty() && it.length <= 60 }.distinct().take(500))
+    }
+
     fun setRecognitionLanguage(tag: String) {
         runOnMain { recognitionLanguage = tag.ifBlank { Locale.getDefault().toLanguageTag() } }
     }
@@ -669,6 +676,9 @@ class VoiceCommandService(
                 // Give the user time to think mid-sentence before deciding they've finished.
                 putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, END_OF_SPEECH_SILENCE_MS)
                 putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, END_OF_SPEECH_SILENCE_MS)
+                if (Build.VERSION.SDK_INT >= 33 && biasingStrings.isNotEmpty()) {
+                    putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, biasingStrings)
+                }
             }
             sessionKind = SessionKind.COMMAND
             _wakeWordArmed.value = true

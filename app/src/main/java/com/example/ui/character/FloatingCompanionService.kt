@@ -336,7 +336,8 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
                     CompanionActionType.NONE, CompanionActionType.SPEAK_LOUD -> Unit
                     CompanionActionType.NAVIGATE_ROUTE, CompanionActionType.WHATS_PLAYING,
                     CompanionActionType.READ_MESSAGES, CompanionActionType.OPEN_APP,
-                    CompanionActionType.YOUTUBE, CompanionActionType.WHATSAPP_SEND_MEDIA -> executeTurn(turn)
+                    CompanionActionType.YOUTUBE, CompanionActionType.WHATSAPP_SEND_MEDIA,
+                    CompanionActionType.SET_ALARM, CompanionActionType.SET_TIMER, CompanionActionType.SHOW_ALARMS -> executeTurn(turn)
                     else -> voice.scheduleActionWithUndoWindow(
                         turn,
                         durationSeconds = 3,

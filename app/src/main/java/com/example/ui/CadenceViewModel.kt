@@ -1,6 +1,7 @@
 package com.example.ui
 
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.net.Uri
@@ -150,9 +151,56 @@ class CadenceViewModel(
         )
     }
 
-    private fun switchVoiceLanguage(label: String) {
+    /** Gives the speech recogniser the user's contact and app names to favour. */
+    fun refreshRecognitionNames() {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val names = runCatching { com.example.actions.ContactResolver(appContext).namesForRecognition() }.getOrDefault(emptyList()) +
+                com.example.actions.AppLauncher.KNOWN.map { it.label }
+            voiceCommandService.setBiasingStrings(names)
+        }
+    }
+
+    /**
+     * Switches the voice language and returns the tag actually used. A plain "Arabic" keeps the
+     * user's Arabic dialect (Iraqi stays Iraqi). If the phone has no voice for the language, says so
+     * and opens the voice download screen instead of reading it with a wrong-language voice.
+     */
+    private fun switchVoiceLanguage(requestedTag: String): String? {
+        val currentTag = com.example.ai.VoiceLanguages.tagFor(_settings.value.preferredLanguage)
+        val lastDialect = prefs.getString("lastArabicDialect", null)
+        val tag = when {
+            requestedTag == "ar" && currentTag.startsWith("ar-") -> currentTag
+            requestedTag == "ar" && lastDialect != null -> lastDialect
+            else -> requestedTag
+        }
+        val label = com.example.ai.VoiceLanguages.labelForTag(tag) ?: return null
+        if (tag.startsWith("ar-")) prefs.edit().putString("lastArabicDialect", tag).apply()
         updateSettings { it.copy(preferredLanguage = label) }
         com.example.ai.VoiceLog.add(com.example.ai.VoiceLog.Kind.AI, "Voice language → $label")
+        checkVoiceInstalled(tag)
+        return tag
+    }
+
+    /** Warns (once per language) when the phone's speech engine has no voice for [tag]. */
+    private fun checkVoiceInstalled(tag: String) {
+        val tts = speechEngine ?: return
+        val status = runCatching { tts.isLanguageAvailable(java.util.Locale.forLanguageTag(tag)) }.getOrDefault(TextToSpeech.LANG_NOT_SUPPORTED)
+        if (status >= TextToSpeech.LANG_AVAILABLE) return
+        val warnedKey = "voiceMissingWarned_" + tag.substringBefore('-')
+        if (prefs.getBoolean(warnedKey, false)) return
+        prefs.edit().putBoolean(warnedKey, true).apply()
+        val name = com.example.ai.VoiceLanguages.englishName(tag)
+        val message = "Your phone doesn't have a $name voice installed, so I'd sound wrong speaking it. " +
+            "I've opened the voice settings: choose your speech engine → Install voice data → $name. " +
+            "If $name isn't in the list, your phone's engine doesn't offer it yet — a natural online voice is coming in a later version. " +
+            "I'll still understand you and write in $name."
+        _chatHistory.value = _chatHistory.value + CompanionChatTurn(id = UUID.randomUUID().toString(), senderIsUser = false, message = message, isActionReport = true)
+        com.example.ai.VoiceLog.add(com.example.ai.VoiceLog.Kind.ERROR, "No $name voice installed on this phone")
+        try {
+            appContext.startActivity(Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (_: Exception) {
+            try { appContext.startActivity(Intent("com.android.settings.TTS_SETTINGS").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (_: Exception) {}
+        }
     }
 
     /** Voice language for recognition + speech, and the wake phrase. */
@@ -432,9 +480,10 @@ class CadenceViewModel(
 
     init {
         applyVoiceSettings(_settings.value)
+        refreshRecognitionNames()
         viewModelScope.launch {
             voiceCommandService.languageRequests.collect { tag ->
-                com.example.ai.VoiceLanguages.labelForTag(tag)?.let(::switchVoiceLanguage)
+                switchVoiceLanguage(tag)
             }
         }
         voiceCommandService.onConversationIdle = { idle ->
@@ -510,6 +559,12 @@ class CadenceViewModel(
             when (result) {
                 is com.example.actions.YouTubeSearch.Result.Unavailable -> {
                     com.example.ai.VoiceLog.add(com.example.ai.VoiceLog.Kind.ERROR, "YouTube search unavailable (${result.reason}); opening a search instead")
+                    // Say why once in the chat, so it can be fixed (Diagnostics → Run check has the steps).
+                    _chatHistory.value = _chatHistory.value + CompanionChatTurn(
+                        id = UUID.randomUUID().toString(), senderIsUser = false, isActionReport = true,
+                        message = "I couldn't pick the exact video (YouTube search: ${result.reason.take(120)}). Opening the search instead." +
+                            if (com.example.actions.WhatsAppHelper.isEnabled(context)) " The helper will tap the first result." else ""
+                    )
                     executeTurnActionNow(context, tts, turn)
                 }
                 is com.example.actions.YouTubeSearch.Result.Found -> {
@@ -959,10 +1014,9 @@ class CadenceViewModel(
         }
 
         // "Switch to English" / "حول عربي": handled on the phone, instantly and without AI quota.
-        com.example.ai.LanguageSwitch.detect(clean)?.let { tag ->
-            val label = com.example.ai.VoiceLanguages.labelForTag(tag)
-            if (label != null) {
-                switchVoiceLanguage(label)
+        com.example.ai.LanguageSwitch.detect(clean)?.let { requested ->
+            val tag = switchVoiceLanguage(requested)
+            if (tag != null) {
                 val confirmation = com.example.ai.LanguageSwitch.confirmation(tag)
                 _chatHistory.value = _chatHistory.value +
                     CompanionChatTurn(id = UUID.randomUUID().toString(), senderIsUser = true, message = clean) +
@@ -997,7 +1051,7 @@ class CadenceViewModel(
             try {
                 // The energy check and the AI call run at the same time; the answer is only used
                 // if the check passes. Offline/Firestore hiccups must not block chatting.
-                val aiTurn = if (localTurn != null) {
+                var aiTurn: CompanionChatTurn = if (localTurn != null) {
                     com.example.ai.VoiceLog.add(com.example.ai.VoiceLog.Kind.AI, "Understood on the phone (no AI used): ${localTurn.actionType.label}")
                     localTurn
                 } else {
@@ -1035,11 +1089,30 @@ class CadenceViewModel(
                 _currentMoodTone.value = aiTurn.detectedTone
 
                 // Check the action before announcing it, so she never says "Calling Mom" for a contact that doesn't exist.
-                val preparation = when (aiTurn.actionType) {
+                fun prepareTurn(t: CompanionChatTurn) = when (t.actionType) {
                     CompanionActionType.NONE, CompanionActionType.SPEAK_LOUD,
                     CompanionActionType.NAVIGATE_ROUTE, CompanionActionType.WHATS_PLAYING,
                     CompanionActionType.SET_VOICE_LANGUAGE -> null
-                    else -> ActionExecutor(context).prepare(aiTurn)
+                    else -> ActionExecutor(context).prepare(t)
+                }
+                var preparation = prepareTurn(aiTurn)
+                // Understood on the phone, but the person wasn't found for sure ("Ali audits"):
+                // ask the AI once for the name's other spellings before asking the user to choose.
+                val blockedOutcome = (preparation as? Preparation.Blocked)?.outcome
+                if (localTurn != null && blockedOutcome != null && blockedOutcome !is ActionOutcome.NeedsPermission &&
+                    aiTurn.actionType in ActionExecutor.PERSON_ACTIONS
+                ) {
+                    com.example.ai.VoiceLog.add(com.example.ai.VoiceLog.Kind.AI, "Name not certain; asking the AI for spellings")
+                    runCatching {
+                        voiceCommandService.processNaturalLanguageCommand(
+                            commandText = clean, companion = activeChar, userName = _settings.value.userName,
+                            history = emptyList(),
+                            preferredLanguage = com.example.ai.VoiceLanguages.promptName(com.example.ai.VoiceLanguages.tagFor(_settings.value.preferredLanguage))
+                        )
+                    }.getOrNull()?.takeIf { it.actionType in ActionExecutor.PERSON_ACTIONS }?.let { retry ->
+                        aiTurn = retry
+                        preparation = prepareTurn(retry)
+                    }
                 }
                 if (preparation is Preparation.Blocked) {
                     val blockedTurn = aiTurn.copy(
@@ -1061,10 +1134,7 @@ class CadenceViewModel(
                 // and the next thing the user says is recognised in it.
                 var replyLanguage = aiTurn.detectedLanguage
                 if (aiTurn.actionType == CompanionActionType.SET_VOICE_LANGUAGE) {
-                    com.example.ai.VoiceLanguages.labelForTag(aiTurn.actionPayload)?.let { label ->
-                        switchVoiceLanguage(label)
-                        replyLanguage = aiTurn.actionPayload
-                    }
+                    switchVoiceLanguage(aiTurn.actionPayload)?.let { replyLanguage = it }
                 }
                 characterController.speakWithLipSync(context, tts, aiTurn.message, activeChar, replyLanguage)
 
@@ -1074,7 +1144,8 @@ class CadenceViewModel(
                     // Harmless and instant: no countdown.
                     CompanionActionType.NAVIGATE_ROUTE, CompanionActionType.WHATS_PLAYING,
                     CompanionActionType.READ_MESSAGES, CompanionActionType.OPEN_APP,
-                    CompanionActionType.WHATSAPP_SEND_MEDIA ->
+                    CompanionActionType.WHATSAPP_SEND_MEDIA, CompanionActionType.SET_ALARM,
+                    CompanionActionType.SET_TIMER, CompanionActionType.SHOW_ALARMS ->
                         executeTurnActionNow(context, tts, aiTurn)
                     CompanionActionType.YOUTUBE -> playYouTube(context, tts, aiTurn)
                     else -> {

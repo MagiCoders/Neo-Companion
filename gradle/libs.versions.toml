@@ -43,6 +43,7 @@ googleid = "1.1.1"
 roborazzi = "1.77.0"
 filament = "1.75.1"
 vosk = "0.3.75"
+desugarJdkLibs = "2.1.5"
 kotlinxSerializationJson = "1.7.3"
 
 
@@ -100,6 +101,7 @@ androidx-credentials-play-services = { group = "androidx.credentials", name = "c
 googleid = { group = "com.google.android.libraries.identity.googleid", name = "googleid", version.ref = "googleid" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
 filament-android = { group = "com.google.android.filament", name = "filament-android", version.ref = "filament" }
+desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugarJdkLibs" }
 vosk-android = { group = "com.alphacephei", name = "vosk-android", version.ref = "vosk" }
 filament-gltfio = { group = "com.google.android.filament", name = "gltfio-android", version.ref = "filament" }
 roborazzi = { group = "io.github.takahirom.roborazzi", name = "roborazzi", version.ref = "roborazzi" }
