@@ -62,9 +62,14 @@ data class MochiPersistentSettings(
     val userName: String = "",
     val userNickname: String = "",
     val userAboutBio: String = "",
-    val preferredLanguage: String = "English",
+    /** Voice language label from VoiceLanguages.ALL ("Phone language" = follow the phone). */
+    val preferredLanguage: String = "Phone language",
     val floatingCompanionEnabled: Boolean = true,
     val wakeWordEnabled: Boolean = false,
+    /** Lower-case phrase that wakes the companion (checked against the offline vocabulary). */
+    val wakePhrase: String = "hey mochi",
+    /** Open-mic Gemini Live conversation instead of turn-by-turn voice. Best with headphones. */
+    val liveVoiceChat: Boolean = false,
     val busyWatchingVideos: Boolean = true,
     val busyPlayingGames: Boolean = true,
     val busyFullScreenApps: Boolean = true,

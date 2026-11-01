@@ -300,7 +300,10 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
             controller.transitionTo(CharacterRuntimeState.Thinking)
             try {
                 val userName = com.example.security.SecureStore(applicationContext).getString("userName")
-                val turn = voice.processNaturalLanguageCommand(clean, activeCharacter, userName)
+                val turn = voice.processNaturalLanguageCommand(
+                    clean, activeCharacter, userName,
+                    preferredLanguage = com.example.ai.VoiceLanguages.englishName(voice.recognitionLanguageTag)
+                )
                 val prep = when (turn.actionType) {
                     CompanionActionType.NONE, CompanionActionType.SPEAK_LOUD,
                     CompanionActionType.NAVIGATE_ROUTE, CompanionActionType.WHATS_PLAYING -> null
@@ -308,11 +311,11 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
                 }
                 if (prep is com.example.actions.Preparation.Blocked) {
                     showBubble(prep.outcome.spoken, autoHideMs = 9_000L)
-                    controller.speakWithLipSync(applicationContext, ttsEngine, prep.outcome.spoken, activeCharacter)
+                    controller.speakWithLipSync(applicationContext, ttsEngine, prep.outcome.spoken, activeCharacter, turn.detectedLanguage)
                     return@launch
                 }
                 showBubble(turn.message, autoHideMs = 9_000L)
-                controller.speakWithLipSync(applicationContext, ttsEngine, turn.message, activeCharacter)
+                controller.speakWithLipSync(applicationContext, ttsEngine, turn.message, activeCharacter, turn.detectedLanguage)
                 when (turn.actionType) {
                     CompanionActionType.NONE, CompanionActionType.SPEAK_LOUD -> Unit
                     CompanionActionType.NAVIGATE_ROUTE, CompanionActionType.WHATS_PLAYING -> executeTurn(turn)

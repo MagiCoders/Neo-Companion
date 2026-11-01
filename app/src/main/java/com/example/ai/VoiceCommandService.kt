@@ -80,6 +80,11 @@ class VoiceCommandService(
         private const val MAX_HARD_ERRORS = 6
         /** Safety net: stop waiting for a reply after this long. */
         private const val AWAIT_REPLY_TIMEOUT_MS = 20_000L
+        /** Pause after she stops talking before a follow-up listen, so the room echo has died down. */
+        private const val FOLLOW_UP_DELAY_MS = 600L
+
+        private fun phraseRegex(words: List<String>): Regex =
+            Regex("(?i)^\\W*" + words.joinToString("\\W+") { Regex.escape(it) } + "\\b[,.!?\\s]*")
 
         @Volatile
         private var INSTANCE: VoiceCommandService? = null
@@ -101,6 +106,11 @@ class VoiceCommandService(
         fun notifyAssistantSpeaking(speaking: Boolean) {
             INSTANCE?.setAssistantSpeaking(speaking)
         }
+
+        /** What the companion just said aloud, so an echo of it is never taken as a command. */
+        fun notifyAssistantSaid(text: String) {
+            INSTANCE?.let { svc -> svc.runOnMain { svc.echoGuard.remember(text) } }
+        }
     }
 
     private enum class SessionKind { WAKE, COMMAND }
@@ -115,6 +125,14 @@ class VoiceCommandService(
     private var speechRecognizer: SpeechRecognizer? = null
     /** Quiet offline "Hey Mochi" listener (no SpeechRecognizer restarts, so no beeps). */
     private val wakeEngine = OfflineWakeWord(appContext)
+    private var wakeMatcher = WakePhraseMatcher(WakePhrases.normalise(WakePhrases.DEFAULT)!!)
+    private var wakeStripRegex = phraseRegex(wakeMatcher.words)
+    /** BCP-47 language the user speaks; recognition runs only in this language. */
+    private var recognitionLanguage: String = Locale.getDefault().toLanguageTag()
+    val recognitionLanguageTag: String get() = recognitionLanguage
+    internal val echoGuard = EchoGuard()
+    /** Open the mic once more when the current reply finishes (she asked a question). */
+    private var followUpPending = false
 
     /** Called when only the wake phrase was heard ("Hey Mochi") — e.g. to open a live voice call. */
     var onWakeWordOnly: (() -> Unit)? = null
@@ -233,6 +251,33 @@ class VoiceCommandService(
         }
     }
 
+    /** The phrase that wakes her ("hey mochi" or a custom one already checked with [unknownWakeWords]). */
+    fun setWakePhrase(phrase: String) {
+        runOnMain {
+            val words = WakePhrases.normalise(phrase) ?: WakePhrases.normalise(WakePhrases.DEFAULT)!!
+            if (words == wakeMatcher.words) return@runOnMain
+            wakeMatcher = WakePhraseMatcher(words)
+            wakeStripRegex = phraseRegex(words)
+            if (sessionKind == SessionKind.WAKE) {
+                cancelSession(destroy = false)
+                reevaluate()
+            }
+        }
+    }
+
+    /** Words of a proposed custom wake phrase the offline engine can't listen for. */
+    fun unknownWakeWords(words: List<String>, onResult: (List<String>) -> Unit) =
+        wakeEngine.unknownWords(words, onResult)
+
+    fun setRecognitionLanguage(tag: String) {
+        runOnMain { recognitionLanguage = tag.ifBlank { Locale.getDefault().toLanguageTag() } }
+    }
+
+    /** Call when the reply about to be spoken expects an answer: the mic reopens once after it. */
+    fun listenAfterNextReply() {
+        runOnMain { followUpPending = true }
+    }
+
     fun updateRecordPermission(granted: Boolean) {
         runOnMain {
             if (hasRecordPermission != granted) {
@@ -321,7 +366,16 @@ class VoiceCommandService(
                 awaitReplyJob?.cancel()
                 restartListeningJob?.cancel()
                 cancelSession(destroy = false)
+            } else if (followUpPending && hosts.isNotEmpty() && hasRecordPermission && !liveCallActive) {
+                // She asked something: listen for the answer once, after the speaker has gone quiet.
+                followUpPending = false
+                restartListeningJob?.cancel()
+                restartListeningJob = scope.launch(Dispatchers.Main) {
+                    delay(FOLLOW_UP_DELAY_MS)
+                    if (!assistantSpeaking && sessionKind != SessionKind.COMMAND) startSession(SessionKind.COMMAND)
+                }
             } else {
+                followUpPending = false
                 // Give the speaker a moment to go quiet before the mic opens again.
                 reevaluate(delayMs = 700L)
             }
@@ -354,7 +408,7 @@ class VoiceCommandService(
     // Session engine (main thread)
     // ------------------------------------------------------------------------------------------
 
-    private fun runOnMain(block: () -> Unit) {
+    internal fun runOnMain(block: () -> Unit) {
         if (Looper.myLooper() == Looper.getMainLooper()) block() else mainHandler.post(block)
     }
 
@@ -404,6 +458,7 @@ class VoiceCommandService(
         restartListeningJob?.cancel()
         if (sessionKind != null) cancelSession(destroy = false)
         val started = wakeEngine.start(
+            matcher = wakeMatcher,
             onWake = {
                 onSessionEnded()
                 hardErrorCount = 0
@@ -448,7 +503,10 @@ class VoiceCommandService(
             }
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
+                // Only the user's chosen language: noise can't come back as Japanese or Korean.
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, recognitionLanguage)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, recognitionLanguage)
+                putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, true)
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                 putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
                 putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, appContext.packageName)
@@ -511,6 +569,12 @@ class VoiceCommandService(
     }
 
     private fun deliverCommand(command: String) {
+        if (echoGuard.isEcho(command)) {
+            // The mic caught her own voice from the speaker: drop it, never answer herself.
+            Log.i(TAG, "Ignored an echo of the companion's own reply")
+            reevaluate(delayMs = WAKE_RESTART_MS)
+            return
+        }
         val callback = onCommandRecognizedCallback ?: return
         // Hold the wake loop until she has answered (or a timeout passes).
         awaitingReply = true
@@ -522,6 +586,9 @@ class VoiceCommandService(
         }
         callback(command)
     }
+
+    private fun stripWake(text: String): String =
+        text.replace(wakeStripRegex, "").replace(WAKE_WORD_REGEX, " ").trim()
 
     private fun createRecognitionListener(): RecognitionListener = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) {}
@@ -568,7 +635,7 @@ class VoiceCommandService(
                 cancelPendingAction()
                 return
             }
-            if (sessionKind == SessionKind.COMMAND) _livePartialTranscript.value = partial.replace(WAKE_WORD_REGEX, "")
+            if (sessionKind == SessionKind.COMMAND) _livePartialTranscript.value = stripWake(partial)
         }
 
         override fun onResults(results: Bundle?) {
@@ -591,7 +658,7 @@ class VoiceCommandService(
                 return
             }
 
-            val cleaned = rawSpoken.replace(WAKE_WORD_REGEX, " ").trim()
+            val cleaned = stripWake(rawSpoken)
             if (cleaned.isNotEmpty()) deliverCommand(cleaned) else reevaluate(WAKE_RESTART_MS)
         }
 
@@ -603,7 +670,8 @@ class VoiceCommandService(
         commandText: String,
         companion: CharacterSpec,
         userName: String = "",
-        history: List<CompanionChatTurn> = emptyList()
+        history: List<CompanionChatTurn> = emptyList(),
+        preferredLanguage: String = ""
     ): CompanionChatTurn {
         val trimmed = commandText.trim()
         if (ABORT_COMMAND_REGEX.matches(trimmed)) {
@@ -617,7 +685,7 @@ class VoiceCommandService(
             )
         }
         // Throws AiUnavailableException on failure; callers show an honest error.
-        return brain.understand(trimmed, companion, userName, history)
+        return brain.understand(trimmed, companion, userName, history, preferredLanguage)
     }
 
     /**
@@ -744,5 +812,38 @@ class VoiceCommandService(
             cancelSession(destroy = true)
             wakeEngine.release()
         }
+    }
+}
+
+/**
+ * Recognises the companion's own words coming back through the microphone (speaker echo).
+ * Main thread only. Pure logic, unit-tested.
+ */
+class EchoGuard(private val clock: () -> Long = System::currentTimeMillis) {
+    private val recent = ArrayDeque<Pair<Set<String>, Long>>()
+
+    fun remember(spoken: String) {
+        val words = tokens(spoken)
+        if (words.isEmpty()) return
+        recent.addLast(words.toSet() to clock())
+        while (recent.size > 6) recent.removeFirst()
+    }
+
+    /** True when most words of [heard] are words she said in the last [WINDOW_MS]. */
+    fun isEcho(heard: String): Boolean {
+        val words = tokens(heard)
+        if (words.size < 2) return false
+        val now = clock()
+        return recent.any { (said, at) ->
+            now - at <= WINDOW_MS && words.count { it in said }.toFloat() / words.size >= OVERLAP
+        }
+    }
+
+    private fun tokens(text: String): List<String> =
+        text.lowercase().split(Regex("[^\\p{L}\\p{N}']+")).filter { it.length > 1 }
+
+    private companion object {
+        const val WINDOW_MS = 25_000L
+        const val OVERLAP = 0.7f
     }
 }

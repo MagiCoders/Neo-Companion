@@ -18,62 +18,73 @@ import java.util.concurrent.Executors
 /**
  * Decides whether one recognised utterance is the wake phrase. Pure logic, unit-tested.
  *
- * The recogniser runs with a tiny grammar (greetings + companion names + "[unk]" for everything
- * else), so any speech is forced onto those words. To avoid waking on random talk we require the
- * name itself to be recognised confidently, and a bare name (no greeting) even more confidently.
+ * The recogniser runs with a tiny grammar (the wake phrase, "stop"/"cancel", sound-alike decoys
+ * and "[unk]" for everything else), so ordinary talk lands on "[unk]" or a decoy. The phrase must be heard as a whole, in
+ * order, with every word recognised confidently.
  */
-object WakePhraseMatcher {
-    val GREETINGS = listOf("hey", "hi", "hello", "okay")
-    val NAMES = listOf("mochi", "elena", "marco")
-    /** Spoken during the 3-second countdown to cancel the action. */
-    val ABORT = listOf("stop", "cancel")
-    /** Greeting + name. Tested with several synthetic voices; other speech lands on "[unk]". */
-    private const val MIN_NAME_CONF = 0.50
-    private const val MIN_ABORT_CONF = 0.80
-    private const val MIN_BARE_NAME_CONF = 0.93
+class WakePhraseMatcher(phrase: List<String>) {
+    val words: List<String> = phrase.map { it.lowercase() }
 
     /** The grammar handed to the recogniser. */
     fun grammarJson(): String {
-        val phrases = NAMES.flatMap { n -> GREETINGS.map { "$it $n" } + n } + ABORT + "[unk]"
-        return phrases.joinToString(",", "[", "]") { "\"$it\"" }
-    }
-
-    /** "stop" / "cancel" said on its own, confidently. */
-    fun isAbort(resultJson: String): Boolean {
-        val words = parse(resultJson)
-        return words.size == 1 && words[0].first in ABORT && words[0].second >= MIN_ABORT_CONF
+        val entries = listOf(words.joinToString(" ")) + ABORT + DECOYS.filter { it !in words } + "[unk]"
+        return entries.joinToString(",", "[", "]") { "\"$it\"" }
     }
 
     /** @param resultJson a Vosk result with word confidences (`setWords(true)`). */
     fun isWake(resultJson: String): Boolean {
-        val words = parse(resultJson)
-        words.forEachIndexed { i, (word, conf) ->
-            if (word !in NAMES) return@forEachIndexed
-            val greeted = i > 0 && words[i - 1].first in GREETINGS
-            if (greeted && conf >= MIN_NAME_CONF) return true
-            if (!greeted && words.size == 1 && conf >= MIN_BARE_NAME_CONF) return true
+        val heard = parse(resultJson)
+        if (heard.size < words.size) return false
+        for (start in 0..heard.size - words.size) {
+            val window = heard.subList(start, start + words.size)
+            if (window.map { it.first } == words && window.all { it.second >= MIN_WORD_CONF }) return true
         }
         return false
     }
 
-    private fun parse(resultJson: String): List<Pair<String, Double>> =
-        try {
-            val arr = JSONObject(resultJson).optJSONArray("result") ?: return emptyList()
-            (0 until arr.length()).map { i ->
-                val o = arr.getJSONObject(i)
-                o.optString("word") to o.optDouble("conf", 0.0)
+    /** "stop" / "cancel" said on its own, confidently. */
+    fun isAbort(resultJson: String): Boolean {
+        val heard = parse(resultJson)
+        return heard.size == 1 && heard[0].first in ABORT && heard[0].second >= MIN_ABORT_CONF
+    }
+
+    companion object {
+        /** Spoken during the 3-second countdown to cancel the action. */
+        val ABORT = listOf("stop", "cancel")
+        /**
+         * Sound-alike words (and lone greetings) that near-misses can land on instead of the wake
+         * phrase. Tested with synthetic voices: "hey Mitch", "hello everybody" or "hey mommy" no
+         * longer wake her, while the real phrase still does.
+         */
+        val DECOYS = listOf(
+            "mitch", "much", "match", "mocha", "macho", "michael", "money", "maybe", "mommy",
+            "buddy", "body", "nobody", "everybody", "bobby", "hey", "hi", "hello", "okay", "honey"
+        )
+        /** Tested with several synthetic voices; other speech lands on "[unk]". */
+        private const val MIN_WORD_CONF = 0.50
+        private const val MIN_ABORT_CONF = 0.80
+
+        private fun parse(resultJson: String): List<Pair<String, Double>> =
+            try {
+                val arr = JSONObject(resultJson).optJSONArray("result")
+                if (arr == null) emptyList() else (0 until arr.length()).map { i ->
+                    val o = arr.getJSONObject(i)
+                    o.optString("word") to o.optDouble("conf", 0.0)
+                }
+            } catch (_: Exception) {
+                emptyList()
             }
-        } catch (_: Exception) {
-            emptyList()
-        }
+    }
 }
 
 /**
  * Always-on, fully offline wake-word listener (Vosk, Apache-2.0, bundled English model in
  * assets/vosk-wake). The model's general dictation graph (graph/Gr.fst) is replaced by an empty
  * graph that keeps only its word list: grammar decoding builds its own graph, so wake results are
- * identical while the app is ~17 MB smaller (see tools/slim_vosk_graph.py). It holds the microphone with a plain AudioRecord, so unlike SpeechRecognizer
- * there are no session restarts and no start/stop beeps. Audio never leaves the phone.
+ * identical while the app is ~17 MB smaller (see tools/slim_vosk_graph.py).
+ *
+ * It holds the microphone with a plain AudioRecord, so unlike SpeechRecognizer there are no
+ * session restarts and no start/stop beeps. Audio never leaves the phone.
  *
  * All public methods are called on the main thread; callbacks arrive on the main thread.
  */
@@ -109,11 +120,11 @@ class OfflineWakeWord(context: Context) {
     }
 
     /** Starts listening. Returns false if the mic could not be opened. */
-    fun start(onWake: () -> Unit, onAbort: () -> Unit, onError: (String) -> Unit): Boolean {
+    fun start(matcher: WakePhraseMatcher, onWake: () -> Unit, onAbort: () -> Unit, onError: (String) -> Unit): Boolean {
         val m = model ?: return false
         if (service != null) return true
         return try {
-            val rec = Recognizer(m, SAMPLE_RATE, WakePhraseMatcher.grammarJson()).apply { setWords(true) }
+            val rec = Recognizer(m, SAMPLE_RATE, matcher.grammarJson()).apply { setWords(true) }
             val svc = SpeechService(rec, SAMPLE_RATE)
             recognizer = rec
             service = svc
@@ -121,10 +132,10 @@ class OfflineWakeWord(context: Context) {
                 override fun onPartialResult(hypothesis: String?) {}
                 override fun onResult(hypothesis: String?) {
                     if (hypothesis == null) return
-                    if (WakePhraseMatcher.isWake(hypothesis)) {
+                    if (matcher.isWake(hypothesis)) {
                         stop()
                         onWake()
-                    } else if (WakePhraseMatcher.isAbort(hypothesis)) {
+                    } else if (matcher.isAbort(hypothesis)) {
                         onAbort()
                     }
                 }
@@ -156,6 +167,40 @@ class OfflineWakeWord(context: Context) {
         val m = model
         model = null
         io.execute { try { m?.close() } catch (_: Throwable) {} }
+    }
+
+    /**
+     * Words of a custom wake phrase that the offline model doesn't know (it can only listen for
+     * words in its English vocabulary). Result on the main thread; empty means the phrase is fine.
+     */
+    fun unknownWords(words: List<String>, onResult: (List<String>) -> Unit) {
+        io.execute {
+            val missing = try {
+                val vocab = vocabulary ?: readVocabulary(File(unpackModel(), "graph/Gr.fst")).also { vocabulary = it }
+                words.filter { it !in vocab }
+            } catch (e: Exception) {
+                Log.w(TAG, "Vocabulary check failed: ${e.javaClass.simpleName}")
+                words
+            }
+            main.post { onResult(missing) }
+        }
+    }
+
+    @Volatile private var vocabulary: Set<String>? = null
+
+    /** Reads the word symbol table stored in an OpenFst file header (little-endian). */
+    private fun readVocabulary(fst: File): Set<String> {
+        val buf = java.nio.ByteBuffer.wrap(fst.readBytes()).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        fun str(): String { val n = buf.int; val b = ByteArray(n); buf.get(b); return String(b, Charsets.UTF_8) }
+        buf.int; str(); str(); buf.int                      // magic, fst type, arc type, version
+        val flags = buf.int
+        buf.long; buf.long; buf.long; buf.long              // properties, start, states, arcs
+        check(flags and 1 != 0) { "no input symbols" }
+        buf.int; str(); buf.long                            // symbol table magic, name, available key
+        val size = buf.long.toInt()
+        val words = HashSet<String>(size * 2)
+        repeat(size) { words += str(); buf.long }
+        return words
     }
 
     /** Copies assets/vosk-wake into private storage once per model version. */

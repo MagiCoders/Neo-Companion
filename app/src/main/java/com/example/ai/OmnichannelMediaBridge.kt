@@ -78,10 +78,8 @@ object OmnichannelMediaBridge {
             if (!availableVoices.isNullOrEmpty()) {
                 val wantsFemaleVoice = character.id == "elena"
                 val bestVoice = availableVoices
-                    .filter { v ->
-                        v.locale.language.equals(targetLang, ignoreCase = true) ||
-                            v.locale.language.equals("en", ignoreCase = true)
-                    }
+                    // Only voices of the reply's language: an English voice reading Persian is gibberish.
+                    .filter { v -> v.locale.language.equals(targetLang, ignoreCase = true) }
                     .maxByOrNull { v ->
                         var score = 0
                         val nameLower = v.name.lowercase()
@@ -113,7 +111,11 @@ object OmnichannelMediaBridge {
 
                 if (bestVoice != null) {
                     tts.voice = bestVoice
+                } else {
+                    tts.setLanguage(locale)
                 }
+            } else {
+                tts.setLanguage(locale)
             }
 
             // Fine-tuned human prosody per companion (warm, conversational, non-robotic)

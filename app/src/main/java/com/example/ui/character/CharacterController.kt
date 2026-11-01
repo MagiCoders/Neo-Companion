@@ -225,14 +225,21 @@ class CharacterController(
      * while speaking audibly on the speaker stream (`TextToSpeech.speak`) and driving
      * `jawOpen`, `mouthO`, `mouthE`, and `mouthSmile` with 80ms attack / 150ms release smoothing.
      */
+    /** The user's voice language (BCP-47); set from Settings by the view model. */
+    @Volatile var defaultLanguageTag: String = java.util.Locale.getDefault().toLanguageTag()
+
     fun speakWithLipSync(
         context: Context,
         tts: TextToSpeech?,
         text: String,
-        character: CharacterSpec
+        character: CharacterSpec,
+        /** BCP-47 language of [text]; defaults to the user's voice language. */
+        languageTag: String? = null
     ) {
         val cleanText = com.example.ai.OmnichannelMediaBridge.formatNaturalSpeechProsody(text)
         if (cleanText.isEmpty()) return
+        val locale = java.util.Locale.forLanguageTag(languageTag?.takeIf { it.isNotBlank() } ?: defaultLanguageTag)
+        com.example.ai.VoiceCommandService.notifyAssistantSaid(cleanText)
 
         speechJob?.cancel()
         speechJob = scope.launch(Dispatchers.Main) {
@@ -249,7 +256,7 @@ class CharacterController(
             try {
                 if (tts != null) {
                     try {
-                        com.example.ai.OmnichannelMediaBridge.configureHumanLikeNeuralVoice(tts, character)
+                        com.example.ai.OmnichannelMediaBridge.configureHumanLikeNeuralVoice(tts, character, locale)
 
                         val utteranceId = "mochi_speak_${System.currentTimeMillis()}"
                         tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {

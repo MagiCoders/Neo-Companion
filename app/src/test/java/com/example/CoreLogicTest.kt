@@ -35,19 +35,54 @@ class CoreLogicTest {
         """{"result":[${words.joinToString(",") { "{\"word\":\"${it.first}\",\"conf\":${it.second}}" }}],"text":"x"}"""
 
     @Test
-    fun `wake phrase needs a greeting and a name, and plain talk never wakes`() {
-        val m = com.example.ai.WakePhraseMatcher
+    fun `wake phrase must be heard whole and in order`() {
+        val m = com.example.ai.WakePhraseMatcher(listOf("hey", "mochi"))
         assertTrue(m.isWake(vosk("hey" to 1.0, "mochi" to 0.58)))
-        assertTrue(m.isWake(vosk("hi" to 1.0, "marco" to 0.7)))
+        assertTrue(m.isWake(vosk("[unk]" to 1.0, "hey" to 1.0, "mochi" to 0.9)))
         assertFalse(m.isWake(vosk("[unk]" to 1.0)))
         assertFalse(m.isWake(vosk("hey" to 1.0, "mochi" to 0.3)))
-        assertFalse(m.isWake(vosk("mochi" to 0.8)))          // a bare name needs very high confidence
-        assertTrue(m.isWake(vosk("mochi" to 0.97)))
-        assertFalse(m.isWake(vosk("hi" to 1.0)))
+        assertFalse(m.isWake(vosk("mochi" to 0.99)))
+        assertFalse(m.isWake(vosk("mochi" to 1.0, "hey" to 1.0)))
+        assertFalse(m.isWake(vosk("hey" to 1.0, "mitch" to 1.0)))
         assertFalse(m.isWake("not json"))
         assertTrue(m.isAbort(vosk("stop" to 0.95)))
         assertFalse(m.isAbort(vosk("hey" to 1.0, "stop" to 0.95)))
-        assertTrue(m.grammarJson().contains("\"hey mochi\"") && m.grammarJson().endsWith("\"[unk]\"]"))
+        val g = m.grammarJson()
+        assertTrue(g.startsWith("[\"hey mochi\"") && g.endsWith("\"[unk]\"]"))
+        // Decoys never include the phrase's own words.
+        assertFalse(com.example.ai.WakePhraseMatcher(listOf("hello", "buddy")).grammarJson().contains("\"buddy\","))
+    }
+
+    @Test
+    fun `custom wake phrases are validated`() {
+        val w = com.example.ai.WakePhrases
+        assertEquals(listOf("hello", "buddy"), w.normalise("  Hello   Buddy "))
+        assertNull(w.normalise("mochi"))
+        assertNull(w.normalise("one two three four five"))
+        assertNull(w.normalise("hey mochi!"))
+        assertEquals("Hey Mochi", w.display("hey mochi"))
+    }
+
+    @Test
+    fun `voice language labels map to recognition tags`() {
+        val v = com.example.ai.VoiceLanguages
+        assertEquals("fa-IR", v.tagFor("فارسی (Persian)"))
+        assertEquals("ar", v.tagFor("العربية"))
+        assertEquals("en-US", v.tagFor("English"))
+        assertEquals(java.util.Locale.getDefault().toLanguageTag(), v.tagFor(v.PHONE))
+        assertEquals("Persian", v.englishName("fa-IR"))
+    }
+
+    @Test
+    fun `her own voice coming back through the mic is ignored`() {
+        var now = 0L
+        val guard = com.example.ai.EchoGuard { now }
+        guard.remember("Sure! I'm calling your mother on WhatsApp now.")
+        assertTrue(guard.isEcho("calling your mother on whatsapp now"))
+        assertFalse(guard.isEcho("call my brother instead"))
+        assertFalse(guard.isEcho("yes"))
+        now = 60_000L
+        assertFalse(guard.isEcho("calling your mother on whatsapp now"))
     }
 
     @Test

@@ -405,7 +405,7 @@ fun MochiAppHost(
                 if (viewModel.currentHashRoute.value == MochiHashRoutes.STAGE) {
                     showConversationSheet = true
                 }
-                viewModel.sendMessageToMochi(context, latestTts, recognizedCommand)
+                viewModel.sendMessageToMochi(context, latestTts, recognizedCommand, fromVoice = true)
             },
             onExecutePendingAction = { confirmedAction ->
                 viewModel.executeTurnActionNow(context, latestTts, confirmedAction.turn)
@@ -479,8 +479,8 @@ fun MochiAppHost(
 
     fun onMicTapped() {
         if (hasMic()) {
-            // Live voice call with Gemini (natural voice, interruptions). Tap again to hang up.
-            viewModel.toggleLiveConversation()
+            // One spoken turn (or a live call when "Live voice chat" is on). Tap again to stop.
+            viewModel.onMicButton(hasRecordPermission = true)
         } else {
             micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }

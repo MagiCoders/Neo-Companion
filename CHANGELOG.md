@@ -2,6 +2,13 @@
 
 Every update gets a new version. Check yours in **Settings** (bottom of the screen): `MochiLife <version> (build <code>)`.
 
+## 1.4 (build 5)
+- **Turn-by-turn voice (new default)**: tap the mic or say the wake phrase, speak once, and she answers. The always-open Gemini Live call (which heard background noise as random languages and could hear herself) is now an option: Settings → **Live voice chat (beta)**, off by default.
+- **Voice language** (Settings): speech is recognised only in the chosen language (Persian added), so noise can't come back as Japanese. She answers aloud in the language you spoke, with a matching voice. If what she heard is unclear, she asks you to repeat instead of guessing an action.
+- **No more talking to herself**: the mic stays closed while she speaks, and anything that matches what she just said is ignored (echo guard).
+- **Follow-up**: when she asks you a question, the mic opens once more after she finishes.
+- **Wake phrase** (Settings): Hey / Hi / Okay / Hello Mochi, or your own 2–4 English words (checked against the offline vocabulary). Sound-alike words ("hey Mitch", "hello everybody") no longer wake her.
+
 ## 1.3 (build 4)
 - Settings → Diagnostics → **Run check**: tests each link of the AI chain on its own (this app's package and signing SHA-1, sign-in, App Check token, one real AI request) and shows Firebase's exact error for any failing step. **Copy report** copies everything.
 - AI errors are no longer all labelled "App Check": API-key restrictions and other access errors are told apart.

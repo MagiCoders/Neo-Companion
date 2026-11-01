@@ -531,6 +531,8 @@ fun ProfileAndSettingsScreen(
     val accent = LocalCharacterAccent.current
     var showLanguageSheet by remember { mutableStateOf(false) }
     var showWakeConfirm by remember { mutableStateOf(false) }
+    var showWakePhraseSheet by remember { mutableStateOf(false) }
+    val wakeDisplay = com.example.ai.WakePhrases.display(settings.wakePhrase)
     var showSignOutConfirm by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val realAllowed = remember(settings) {
@@ -721,7 +723,7 @@ fun ProfileAndSettingsScreen(
             HairlineDivider(p.hairline)
             SettingsIconNavRow(
                 icon = Icons.Outlined.Language,
-                title = "Language",
+                title = "Voice language",
                 trailingText = settings.preferredLanguage,
                 palette = p,
                 onClick = { showLanguageSheet = true }
@@ -763,8 +765,8 @@ fun ProfileAndSettingsScreen(
             HairlineDivider(p.hairline)
             SettingsIconToggleRow(
                 icon = Icons.Outlined.Mic,
-                title = "\"Hey Mochi\" wake word",
-                subtitle = "Keeps the mic on, uses more battery",
+                title = "\"$wakeDisplay\" wake word",
+                subtitle = "Listens offline for this phrase only",
                 checked = settings.wakeWordEnabled,
                 accent = accent,
                 palette = p,
@@ -772,6 +774,24 @@ fun ProfileAndSettingsScreen(
                     if (enabled) showWakeConfirm = true
                     else onUpdateSettings { it.copy(wakeWordEnabled = false) }
                 }
+            )
+            HairlineDivider(p.hairline)
+            SettingsIconNavRow(
+                icon = Icons.Outlined.GraphicEq,
+                title = "Wake phrase",
+                trailingText = wakeDisplay,
+                palette = p,
+                onClick = { showWakePhraseSheet = true }
+            )
+            HairlineDivider(p.hairline)
+            SettingsIconToggleRow(
+                icon = Icons.Outlined.Language,
+                title = "Live voice chat (beta)",
+                subtitle = "Open conversation instead of one turn at a time. Use headphones, or she may hear herself.",
+                checked = settings.liveVoiceChat,
+                accent = accent,
+                palette = p,
+                onCheckedChange = { enabled -> onUpdateSettings { it.copy(liveVoiceChat = enabled) } }
             )
         }
 
@@ -887,8 +907,8 @@ fun ProfileAndSettingsScreen(
     }
     if (showWakeConfirm) {
         SettingsConfirmDialog(
-            title = "Listen for \"Hey ${activeCharacter.displayName.substringAfter(" ")}\"?",
-            body = "While the app is open or your companion is floating, the microphone stays on and only reacts when it hears her name. It uses more battery, and some phones play a short sound each time listening restarts.",
+            title = "Listen for \"$wakeDisplay\"?",
+            body = "While the app is open or your companion is floating, the microphone listens on this phone only, offline, for \"$wakeDisplay\". Nothing is recorded or sent anywhere until you say it. It uses a little more battery.",
             confirm = "Turn on",
             danger = false,
             accent = accent,
@@ -897,6 +917,17 @@ fun ProfileAndSettingsScreen(
                 showWakeConfirm = false
             },
             onDismiss = { showWakeConfirm = false }
+        )
+    }
+    if (showWakePhraseSheet) {
+        WakePhraseSheet(
+            current = settings.wakePhrase,
+            accent = accent,
+            onPick = { phrase ->
+                onUpdateSettings { it.copy(wakePhrase = phrase) }
+                showWakePhraseSheet = false
+            },
+            onDismiss = { showWakePhraseSheet = false }
         )
     }
     if (showSignOutConfirm) {
@@ -2702,11 +2733,78 @@ object SystemPermissions {
 // Settings sheets & dialogs (Screen map: Language sheet, wake-word confirm, Appearance, Sign out)
 // ---------------------------------------------------------------------------------------------
 
-private val SettingsLanguages = listOf(
-    "English", "العربية (Arabic)", "اردو (Urdu)", "Español", "Français", "Deutsch", "Italiano",
-    "Português", "Türkçe", "Русский", "हिन्दी (Hindi)", "বাংলা (Bengali)", "Bahasa Indonesia",
-    "日本語 (Japanese)", "한국어 (Korean)", "中文 (Chinese)", "Filipino", "Nederlands", "Polski"
-)
+private val SettingsLanguages = com.example.ai.VoiceLanguages.ALL.map { it.label }
+
+/** Pick a preset wake phrase or type a custom one (checked against the offline vocabulary). */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun WakePhraseSheet(current: String, accent: Color, onPick: (String) -> Unit, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    var custom by remember { mutableStateOf(if (current in com.example.ai.WakePhrases.PRESETS) "" else current) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var checking by remember { mutableStateOf(false) }
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MochiTokens.sheet,
+        scrimColor = MochiTokens.scrim,
+        shape = MochiShapes.sheetTop
+    ) {
+        Column(Modifier.padding(horizontal = MochiSpacing.screenPadding).padding(bottom = 24.dp)) {
+            Text("Wake phrase", style = MochiType.Title, color = MochiTokens.textPrimary)
+            Text("Say this to wake your companion. Two to four English words work best.", style = MochiType.Label, color = MochiTokens.textSecondary)
+            Spacer(Modifier.height(8.dp))
+            com.example.ai.WakePhrases.PRESETS.forEach { phrase ->
+                Row(
+                    Modifier.fillMaxWidth().clip(MochiShapes.card).clickable { onPick(phrase) }.padding(horizontal = 12.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(com.example.ai.WakePhrases.display(phrase), style = MochiType.Body, color = MochiTokens.textPrimary, modifier = Modifier.weight(1f))
+                    if (phrase == current) Icon(Icons.Outlined.Check, "Selected", tint = MochiTokens.accentInk(accent), modifier = Modifier.size(20.dp))
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Text("Or your own", style = MochiType.Label, color = MochiTokens.textSecondary)
+            Spacer(Modifier.height(6.dp))
+            androidx.compose.foundation.text.BasicTextField(
+                value = custom,
+                onValueChange = { custom = it.take(40); error = null },
+                singleLine = true,
+                textStyle = MochiType.Body.copy(color = MochiTokens.textPrimary),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(accent),
+                decorationBox = { inner ->
+                    Box(
+                        Modifier.fillMaxWidth().height(48.dp).clip(MochiShapes.pill).background(MochiTokens.card2).padding(horizontal = 16.dp),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        if (custom.isEmpty()) Text("e.g. Hello Buddy", style = MochiType.Body, color = MochiTokens.textTertiary)
+                        inner()
+                    }
+                }
+            )
+            error?.let { Text(it, style = MochiType.Label, color = MochiTokens.danger, modifier = Modifier.padding(top = 6.dp)) }
+            Spacer(Modifier.height(10.dp))
+            Box(
+                Modifier.fillMaxWidth().height(48.dp).clip(MochiShapes.pill).background(accent)
+                    .clickable(enabled = !checking) {
+                        val words = com.example.ai.WakePhrases.normalise(custom)
+                        if (words == null) {
+                            error = "Use two to four English words, letters only."
+                            return@clickable
+                        }
+                        checking = true
+                        com.example.ai.VoiceCommandService.shared(context).unknownWakeWords(words) { missing ->
+                            checking = false
+                            if (missing.isEmpty()) onPick(words.joinToString(" "))
+                            else error = "The offline listener doesn't know: ${missing.joinToString(", ")}. Try another word or spelling."
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(if (checking) "Checking…" else "Use my phrase", style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold), color = MochiTokens.onAccent)
+            }
+        }
+    }
+}
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable

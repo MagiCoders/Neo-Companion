@@ -129,9 +129,11 @@ class CadenceViewModel(
             userName = secure.getString("userName"),
             userNickname = secure.getString("userNickname"),
             userAboutBio = secure.getString("userAboutBio"),
-            preferredLanguage = prefs.getString("preferredLanguage", "English") ?: "English",
+            preferredLanguage = prefs.getString("preferredLanguage", com.example.ai.VoiceLanguages.PHONE) ?: com.example.ai.VoiceLanguages.PHONE,
             floatingCompanionEnabled = prefs.getBoolean("floatingCompanionEnabled", true),
             wakeWordEnabled = prefs.getBoolean("wakeWordEnabled", false),
+            wakePhrase = prefs.getString("wakePhrase", com.example.ai.WakePhrases.DEFAULT) ?: com.example.ai.WakePhrases.DEFAULT,
+            liveVoiceChat = prefs.getBoolean("liveVoiceChat", false),
             busyWatchingVideos = prefs.getBoolean("busyWatchingVideos", true),
             busyPlayingGames = prefs.getBoolean("busyPlayingGames", true),
             busyFullScreenApps = prefs.getBoolean("busyFullScreenApps", true),
@@ -146,6 +148,14 @@ class CadenceViewModel(
         )
     }
 
+    /** Voice language for recognition + speech, and the wake phrase. */
+    private fun applyVoiceSettings(s: MochiPersistentSettings) {
+        val tag = com.example.ai.VoiceLanguages.tagFor(s.preferredLanguage)
+        voiceCommandService.setRecognitionLanguage(tag)
+        voiceCommandService.setWakePhrase(s.wakePhrase)
+        characterController.defaultLanguageTag = tag
+    }
+
     fun updateSettings(transform: (MochiPersistentSettings) -> MochiPersistentSettings) {
         val updated = transform(_settings.value)
         _settings.value = updated
@@ -153,7 +163,10 @@ class CadenceViewModel(
         secure.putString("userNickname", updated.userNickname.take(60))
         secure.putString("userAboutBio", updated.userAboutBio.take(1_000))
         voiceCommandService.setWakeWordEnabled(updated.wakeWordEnabled)
+        applyVoiceSettings(updated)
         prefs.edit()
+            .putString("wakePhrase", updated.wakePhrase)
+            .putBoolean("liveVoiceChat", updated.liveVoiceChat)
             .putString("preferredLanguage", updated.preferredLanguage)
             .putBoolean("floatingCompanionEnabled", updated.floatingCompanionEnabled)
             .putBoolean("wakeWordEnabled", updated.wakeWordEnabled)
@@ -395,10 +408,21 @@ class CadenceViewModel(
     }
 
     init {
-        // "Hey Mochi" on its own opens a live voice call.
+        applyVoiceSettings(_settings.value)
+        // Wake phrase heard: take one spoken request (or open a live call if the user chose that).
         voiceCommandService.onWakeWordOnly = {
-            if (!liveConversation.isActive()) toggleLiveConversation()
+            if (_settings.value.liveVoiceChat) {
+                if (!liveConversation.isActive()) toggleLiveConversation()
+            } else {
+                voiceCommandService.triggerManualMicSession(hasRecordPermission = true)
+            }
         }
+    }
+
+    /** Mic button: one spoken turn by default; a live call when "Live voice chat" is on (or one is running). */
+    fun onMicButton(hasRecordPermission: Boolean) {
+        if (_settings.value.liveVoiceChat || liveConversation.isActive()) toggleLiveConversation()
+        else voiceCommandService.triggerManualMicSession(hasRecordPermission)
     }
 
     override fun onCleared() {
@@ -779,7 +803,9 @@ class CadenceViewModel(
     fun sendMessageToMochi(
         context: Context,
         tts: TextToSpeech?,
-        userText: String
+        userText: String,
+        /** True when the text came from the microphone: she may listen again after a question. */
+        fromVoice: Boolean = false
     ) {
         val clean = userText.trim().take(4_000)
         if (clean.isEmpty() || _isCompanionThinking.value) {
@@ -823,7 +849,10 @@ class CadenceViewModel(
                         commandText = clean,
                         companion = activeChar,
                         userName = _settings.value.userName,
-                        history = history.filterNot { it.isActionReport }
+                        history = history.filterNot { it.isActionReport },
+                        preferredLanguage = com.example.ai.VoiceLanguages.englishName(
+                            com.example.ai.VoiceLanguages.tagFor(_settings.value.preferredLanguage)
+                        )
                     )
                 } catch (e: AiUnavailableException) {
                     reportOutcome(context, tts, ActionOutcome.Failed(e.message ?: "Something went wrong."))
@@ -851,12 +880,15 @@ class CadenceViewModel(
                     if (preparation.outcome is ActionOutcome.NeedsPermission) {
                         _permissionRequests.tryEmit((preparation.outcome as ActionOutcome.NeedsPermission).permission)
                     }
-                    characterController.speakWithLipSync(context, tts, blockedTurn.message, activeChar)
+                    characterController.speakWithLipSync(context, tts, blockedTurn.message, activeChar, aiTurn.detectedLanguage)
                     return@launch
                 }
 
                 _chatHistory.value = _chatHistory.value + aiTurn
-                characterController.speakWithLipSync(context, tts, aiTurn.message, activeChar)
+                if (fromVoice && aiTurn.actionType == CompanionActionType.NONE && aiTurn.message.trimEnd().endsWith("?")) {
+                    voiceCommandService.listenAfterNextReply()
+                }
+                characterController.speakWithLipSync(context, tts, aiTurn.message, activeChar, aiTurn.detectedLanguage)
 
                 when (aiTurn.actionType) {
                     CompanionActionType.NONE, CompanionActionType.SPEAK_LOUD -> Unit
