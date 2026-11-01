@@ -2,6 +2,13 @@
 
 Every update gets a new version. Check yours in **Settings** (bottom of the screen): `MochiLife <version> (build <code>)`.
 
+## 1.7 (build 8)
+- **Fixed: "Conversation ended (no reply)" right after waking.** While she talked, the wake listener held the microphone; when she finished, the speech recogniser started before the mic was really released and Android gave it silence. The wake listener now waits until the mic is free, and no longer marks its recording as "privacy sensitive" (which made Android silence other recorders).
+- **Faster wake-up**: the wake listener decides after a shorter pause.
+- **AI quota**: quick turns now use gemini-3.5-flash-lite (about 500 free requests/day) and real tasks gemini-3.6-flash (about 20/day). If one is out of quota, the other answers automatically. The quota message now says what's happening and how to remove the limit.
+- **Voice log** now also shows what she said, when the mic opened for you, and recogniser errors, plus which model answered.
+- "Hi Elsa" (a sound-alike of your wake phrase) is removed from what you say before it goes to the AI.
+
 ## 1.6 (build 7)
 - **Real conversations**: say the wake phrase (or tap the mic) and she answers right away ("Yes? I'm listening."), then keeps listening after every reply, so you can talk back and forth without repeating her name. It ends when you say goodbye ("bye", "that's all", "خلاص", "خداحافظ"…), stay quiet after her reply, tap the mic, or an action opens another app (e.g. a WhatsApp call).
 - **Switch language by voice**: "switch to Arabic", "talk in Persian", "speak Iraqi": she changes the voice language (recognition and voice) and answers in it. New Arabic dialect options: Iraqi, Saudi, Egyptian, Emirati.

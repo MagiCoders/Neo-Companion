@@ -238,10 +238,18 @@ class OfflineWakeWord(context: Context) {
         return true
     }
 
-    /** Releases the microphone (the recording thread closes it within ~0.1 s). */
+    /**
+     * Releases the microphone and waits (briefly) until it is really free, so the speech
+     * recogniser that starts next doesn't get silence from Android's shared-mic policy.
+     */
     fun stop() {
-        session?.running = false
+        val s = session ?: return
         session = null
+        s.running = false
+        s.interruptRecording()
+        if (Thread.currentThread() !== s.thread) {
+            try { s.thread.join(STOP_WAIT_MS) } catch (_: InterruptedException) {}
+        }
     }
 
     fun release() {
@@ -280,6 +288,11 @@ class OfflineWakeWord(context: Context) {
         private val effects = mutableListOf<android.media.audiofx.AudioEffect>()
         val thread = Thread(::loop, "wake-word")
 
+        /** Unblocks a pending read() so the thread can exit at once. */
+        fun interruptRecording() {
+            try { record?.stop() } catch (_: Throwable) {}
+        }
+
         @SuppressLint("MissingPermission") // only started when RECORD_AUDIO is granted
         fun open(): Boolean {
             val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
@@ -287,7 +300,18 @@ class OfflineWakeWord(context: Context) {
             val bufBytes = maxOf(minBuf, SAMPLE_RATE / 5 * 2)
             for (source in listOf(MediaRecorder.AudioSource.VOICE_COMMUNICATION, MediaRecorder.AudioSource.VOICE_RECOGNITION)) {
                 val r = try {
-                    AudioRecord(source, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufBytes)
+                    if (android.os.Build.VERSION.SDK_INT >= 30) {
+                        // Not "privacy sensitive": otherwise Android silences every other recorder
+                        // (the speech recogniser) while this one is open.
+                        AudioRecord.Builder()
+                            .setAudioSource(source)
+                            .setAudioFormat(AudioFormat.Builder().setSampleRate(SAMPLE_RATE).setChannelMask(AudioFormat.CHANNEL_IN_MONO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
+                            .setBufferSizeInBytes(bufBytes)
+                            .setPrivacySensitive(false)
+                            .build()
+                    } else {
+                        AudioRecord(source, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufBytes)
+                    }
                 } catch (_: Exception) { null }
                 if (r != null && r.state == AudioRecord.STATE_INITIALIZED) { record = r; break }
                 r?.release()
@@ -298,7 +322,10 @@ class OfflineWakeWord(context: Context) {
             if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(r.audioSessionId)?.let { it.enabled = true; effects += it; applied += "noise suppressor" }
             lastAudioEffects = if (applied.isEmpty()) "none available on this phone" else applied.joinToString(" + ")
             return try {
-                recognizer = Recognizer(model, SAMPLE_RATE.toFloat(), matcher.grammarJson()).apply { setWords(true) }
+                recognizer = Recognizer(model, SAMPLE_RATE.toFloat(), matcher.grammarJson()).apply {
+                    setWords(true)
+                    setEndpointerMode(ENDPOINTER_SHORT) // decide sooner after the phrase ends
+                }
                 r.startRecording()
                 r.recordingState == AudioRecord.RECORDSTATE_RECORDING
             } catch (e: Exception) {
@@ -390,6 +417,9 @@ class OfflineWakeWord(context: Context) {
     companion object {
         private const val TAG = "OfflineWakeWord"
         private const val SAMPLE_RATE = 16_000
+        private const val STOP_WAIT_MS = 400L
+        /** Vosk endpointer mode 1 = short pauses end an utterance (faster wake-up). */
+        private const val ENDPOINTER_SHORT = 1
         private const val ASSET_DIR = "vosk-wake"
         /** Bump when the bundled model changes so it is unpacked again. */
         private const val MODEL_VERSION = "small-en-us-0.15-wake1"

@@ -120,6 +120,7 @@ class VoiceCommandService(
 
         /** What the companion just said aloud, so an echo of it is never taken as a command. */
         fun notifyAssistantSaid(text: String) {
+            VoiceLog.add(VoiceLog.Kind.SPOKE, "\"$text\"")
             INSTANCE?.let { svc -> svc.runOnMain { svc.echoGuard.remember(text) } }
         }
     }
@@ -595,6 +596,7 @@ class VoiceCommandService(
             _isWakeLoopRunning.value = false
             _livePartialTranscript.value = ""
             recognizer.startListening(intent)
+            VoiceLog.add(VoiceLog.Kind.HEARD, "Mic open, listening for you ($recognitionLanguage)")
         } catch (e: Exception) {
             Log.w(TAG, "Could not start SpeechRecognizer: ${e.message}")
             onHardError("start failed: ${e.message}", destroy = true)
@@ -668,8 +670,12 @@ class VoiceCommandService(
         callback(command)
     }
 
-    private fun stripWake(text: String): String =
-        text.replace(wakeStripRegex, "").replace(WAKE_WORD_REGEX, " ").trim()
+    private fun stripWake(text: String): String {
+        var t = text.replace(wakeStripRegex, "")
+        // Also the sound-alike spellings the recogniser may write ("hi Elsa" for "hi Elza").
+        wakeMatcher.variants.forEach { t = t.replace(phraseRegex(it), "") }
+        return t.replace(WAKE_WORD_REGEX, " ").trim()
+    }
 
     private fun createRecognitionListener(): RecognitionListener = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) {}
@@ -689,6 +695,7 @@ class VoiceCommandService(
                 SpeechRecognizer.ERROR_NO_MATCH,
                 SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
                     // Nothing said: the conversation is over; go back to quiet wake listening.
+                    VoiceLog.add(VoiceLog.Kind.IGNORED, if (error == SpeechRecognizer.ERROR_NO_MATCH) "Speech heard but not understood" else "No speech heard")
                     onSessionEnded()
                     endConversation("no reply")
                     hardErrorCount = 0
@@ -702,7 +709,10 @@ class VoiceCommandService(
                 }
                 SpeechRecognizer.ERROR_RECOGNIZER_BUSY,
                 SpeechRecognizer.ERROR_CLIENT -> onHardError("busy/client ($error)", destroy = true)
-                else -> onHardError("error $error", destroy = false)
+                else -> {
+                    VoiceLog.add(VoiceLog.Kind.ERROR, "Speech recogniser error $error")
+                    onHardError("error $error", destroy = false)
+                }
             }
         }
 

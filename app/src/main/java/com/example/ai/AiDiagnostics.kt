@@ -47,7 +47,7 @@ object AiDiagnostics {
         Reason.API_KEY_BLOCKED -> "The project's API key doesn't allow this copy of the app. Settings → Diagnostics → Run check shows the details."
         Reason.ACCESS_DENIED -> "Firebase refused the AI request. Settings → Diagnostics → Run check shows the exact reason."
         Reason.API_DISABLED -> "The Firebase AI service isn't switched on for this project yet."
-        Reason.QUOTA -> "The AI is busy or today's AI quota is used up. Please try again in a little while."
+        Reason.QUOTA -> "Google's free AI quota for this app is used up for now. It resets daily (midnight US Pacific time); turning on billing in Firebase removes the limit."
         Reason.MODEL -> "The AI model isn't available right now. Please try again later."
         Reason.NETWORK -> "I can't reach the internet right now. Check your connection and try again."
         Reason.TIMEOUT -> "The AI took too long to answer. Please try again."

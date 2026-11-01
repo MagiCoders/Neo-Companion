@@ -20,8 +20,13 @@ import java.util.UUID
 
 /** Model names in one place (see firebase.google.com/docs/ai-logic/models). */
 object AiModels {
-    /** Conversation + intent understanding. Stable, multilingual. */
+    /** Real tasks (plans, recipes, bill splits, "why/how"): the stronger model. */
     const val CHAT = "gemini-3.6-flash"
+    /**
+     * Quick turns (chat, "call Mom"): fast and with a much larger free daily quota
+     * (free tier, Oct 2026: about 500 requests/day vs about 20 for gemini-3.6-flash).
+     */
+    const val CHAT_FAST = "gemini-3.5-flash-lite"
     /** Cheap, fast vision/extraction jobs (fridge photos, receipts, OCR). */
     const val VISION_FAST = "gemini-3.5-flash-lite"
     /** Real-time voice conversation (Gemini Live, native audio; Developer API preview). */
@@ -55,12 +60,12 @@ class CompanionBrain {
         )
     )
 
-    /** One model per thinking level, created on first use. */
-    private val models = java.util.concurrent.ConcurrentHashMap<ThinkingRouter.Level, com.google.firebase.ai.GenerativeModel>()
+    /** One model per (name, thinking level), created on first use. */
+    private val models = java.util.concurrent.ConcurrentHashMap<Pair<String, ThinkingRouter.Level>, com.google.firebase.ai.GenerativeModel>()
 
-    private fun modelFor(level: ThinkingRouter.Level) = models.getOrPut(level) {
+    private fun modelFor(name: String, level: ThinkingRouter.Level) = models.getOrPut(name to level) {
         Firebase.ai(backend = GenerativeBackend.googleAI()).generativeModel(
-            modelName = AiModels.CHAT,
+            modelName = name,
             generationConfig = generationConfig {
                 temperature = 0.4f
                 responseMimeType = "application/json"
@@ -107,15 +112,34 @@ class CompanionBrain {
             appendLine(PromptSafety.quote(userText))
         }
         val level = ThinkingRouter.levelFor(userText)
-        val startedAt = System.currentTimeMillis()
-        val raw = try {
-            withTimeout(30_000L) { modelFor(level).generateContent(prompt).text }
-                .also { VoiceLog.add(VoiceLog.Kind.AI, "Answered in %.1f s (thinking %s)".format((System.currentTimeMillis() - startedAt) / 1000.0, level.name.lowercase())) }
-        } catch (e: Exception) {
-            VoiceLog.add(VoiceLog.Kind.ERROR, "AI failed after %.1f s: %s".format((System.currentTimeMillis() - startedAt) / 1000.0, e.javaClass.simpleName))
-            Log.w(TAG, "AI request failed: ${e.javaClass.simpleName}")
-            throw AiUnavailableException(AiDiagnostics.report(e), e)
-        } ?: throw AiUnavailableException("I didn't get an answer. Please try again.")
+        // Quick turns go to the fast model, real tasks to the strong one; if one is out of quota
+        // (or can't serve the request) the other answers instead.
+        val order = if (level == ThinkingRouter.Level.HIGH) listOf(AiModels.CHAT, AiModels.CHAT_FAST)
+        else listOf(AiModels.CHAT_FAST, AiModels.CHAT)
+        var raw: String? = null
+        var lastError: Exception? = null
+        for (name in order) {
+            val startedAt = System.currentTimeMillis()
+            try {
+                raw = withTimeout(30_000L) { modelFor(name, level).generateContent(prompt).text }
+                VoiceLog.add(VoiceLog.Kind.AI, "Answered in %.1f s (%s, thinking %s)".format(
+                    (System.currentTimeMillis() - startedAt) / 1000.0, name, level.name.lowercase()))
+                break
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException && e !is kotlinx.coroutines.TimeoutCancellationException) throw e
+                lastError = e
+                val reason = AiDiagnostics.classify(e)
+                VoiceLog.add(VoiceLog.Kind.ERROR, "%s failed after %.1f s: %s".format(
+                    name, (System.currentTimeMillis() - startedAt) / 1000.0, e.javaClass.simpleName))
+                Log.w(TAG, "AI request failed on $name: ${e.javaClass.simpleName}")
+                // Problems the other model can't fix either (no internet, app not approved…): stop here.
+                if (reason in NO_FALLBACK) break
+            }
+        }
+        if (raw == null) {
+            lastError?.let { throw AiUnavailableException(AiDiagnostics.report(it), it) }
+            throw AiUnavailableException("I didn't get an answer. Please try again.")
+        }
 
         parse(raw)
     }
@@ -150,6 +174,11 @@ class CompanionBrain {
     }
 
     companion object {
+        /** Failures the other model can't fix either. */
+        private val NO_FALLBACK = setOf(
+            AiDiagnostics.Reason.NETWORK, AiDiagnostics.Reason.TIMEOUT, AiDiagnostics.Reason.APP_CHECK,
+            AiDiagnostics.Reason.API_KEY_BLOCKED, AiDiagnostics.Reason.ACCESS_DENIED, AiDiagnostics.Reason.API_DISABLED
+        )
         private const val TAG = "CompanionBrain"
 
         private val SYSTEM_PROMPT = """
