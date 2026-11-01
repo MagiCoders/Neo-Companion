@@ -2743,6 +2743,19 @@ private fun WakePhraseSheet(current: String, accent: Color, onPick: (String) -> 
     var custom by remember { mutableStateOf(if (current in com.example.ai.WakePhrases.PRESETS) "" else current) }
     var error by remember { mutableStateOf<String?>(null) }
     var checking by remember { mutableStateOf(false) }
+    /** Typed phrase → explanation of the sound-alikes, waiting for the user to confirm. */
+    var pendingSoundsLike by remember { mutableStateOf<Pair<String, String>?>(null) }
+    pendingSoundsLike?.let { (phrase, explanation) ->
+        SettingsConfirmDialog(
+            title = "Use \"${com.example.ai.WakePhrases.display(phrase)}\"?",
+            body = "The offline listener doesn't have every name in its dictionary, so it will listen for $explanation, which sound the same. Your phrase is still shown as you typed it.",
+            confirm = "Use it",
+            danger = false,
+            accent = accent,
+            onConfirm = { pendingSoundsLike = null; onPick(phrase) },
+            onDismiss = { pendingSoundsLike = null }
+        )
+    }
     androidx.compose.material3.ModalBottomSheet(
         onDismissRequest = onDismiss,
         containerColor = MochiTokens.sheet,
@@ -2751,7 +2764,7 @@ private fun WakePhraseSheet(current: String, accent: Color, onPick: (String) -> 
     ) {
         Column(Modifier.padding(horizontal = MochiSpacing.screenPadding).padding(bottom = 24.dp)) {
             Text("Wake phrase", style = MochiType.Title, color = MochiTokens.textPrimary)
-            Text("Say this to wake your companion. Two to four English words work best.", style = MochiType.Label, color = MochiTokens.textSecondary)
+            Text("Say this to wake your companion. Two to four words, written in English letters. Names work too.", style = MochiType.Label, color = MochiTokens.textSecondary)
             Spacer(Modifier.height(8.dp))
             com.example.ai.WakePhrases.PRESETS.forEach { phrase ->
                 Row(
@@ -2776,7 +2789,7 @@ private fun WakePhraseSheet(current: String, accent: Color, onPick: (String) -> 
                         Modifier.fillMaxWidth().height(48.dp).clip(MochiShapes.pill).background(MochiTokens.card2).padding(horizontal = 16.dp),
                         contentAlignment = Alignment.CenterStart
                     ) {
-                        if (custom.isEmpty()) Text("e.g. Hello Buddy", style = MochiType.Body, color = MochiTokens.textTertiary)
+                        if (custom.isEmpty()) Text("e.g. Hi Elza", style = MochiType.Body, color = MochiTokens.textTertiary)
                         inner()
                     }
                 }
@@ -2792,10 +2805,15 @@ private fun WakePhraseSheet(current: String, accent: Color, onPick: (String) -> 
                             return@clickable
                         }
                         checking = true
-                        com.example.ai.VoiceCommandService.shared(context).unknownWakeWords(words) { missing ->
+                        com.example.ai.VoiceCommandService.shared(context).resolveWakePhrase(words) { r ->
                             checking = false
-                            if (missing.isEmpty()) onPick(words.joinToString(" "))
-                            else error = "The offline listener doesn't know: ${missing.joinToString(", ")}. Try another word or spelling."
+                            when {
+                                !r.ok -> error = "Can't listen for: ${r.unresolved.joinToString(", ")}. Try a different spelling, or how it sounds (e.g. \"Elsa\" for \"Elza\")."
+                                r.soundsLike.isEmpty() -> onPick(words.joinToString(" "))
+                                else -> pendingSoundsLike = words.joinToString(" ") to r.soundsLike.entries.joinToString("; ") { (w, alts) ->
+                                    "\"${com.example.ai.WakePhrases.display(w)}\" as " + alts.joinToString(" or ") { "\"${com.example.ai.WakePhrases.display(it)}\"" }
+                                }
+                            }
                         }
                     },
                 contentAlignment = Alignment.Center
@@ -2934,6 +2952,8 @@ private fun DiagnosticsCard(p: SuitePalette) {
     var copied by remember { mutableStateOf(false) }
     var running by remember { mutableStateOf(false) }
     var steps by remember { mutableStateOf<List<com.example.ai.AiDiagnostics.Step>>(emptyList()) }
+    val voiceLog by com.example.ai.VoiceLog.entries.collectAsState()
+    var copiedLog by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -2974,6 +2994,24 @@ private fun DiagnosticsCard(p: SuitePalette) {
                     clipboard.setText(androidx.compose.ui.text.AnnotatedString(report + (debugSecret?.let { "\n\nDebug token: $it" } ?: "")))
                     copied = true
                 }
+            }
+        }
+        HairlineDivider(p.hairline)
+        Text("Voice", style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold), color = p.textPrimary)
+        Text(remember(voiceLog) { com.example.ai.VoiceCommandService.shared(context).wakeStatus }, style = MochiType.Label, color = p.textTertiary)
+        if (voiceLog.isEmpty()) {
+            Text("Nothing heard yet. Talk to your companion, then come back to see what she heard and why she reacted.", style = MochiType.Label, color = p.textTertiary)
+        } else {
+            val timeFormat = remember { java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.ROOT) }
+            voiceLog.takeLast(12).forEach { e ->
+                Text("${timeFormat.format(java.util.Date(e.atMillis))}  ${e.kind.name.lowercase()}  ${e.text}", style = MochiType.Label, color = p.textTertiary)
+            }
+            DiagnosticsButton(if (copiedLog) "Copied" else "Copy voice log", p) {
+                clipboard.setText(androidx.compose.ui.text.AnnotatedString(
+                    com.example.ai.VoiceCommandService.shared(context).wakeStatus + "\n" +
+                        voiceLog.joinToString("\n") { "${timeFormat.format(java.util.Date(it.atMillis))} ${it.kind} ${it.text}" }
+                ))
+                copiedLog = true
             }
         }
         steps.forEach { step ->

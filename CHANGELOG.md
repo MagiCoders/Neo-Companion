@@ -2,6 +2,14 @@
 
 Every update gets a new version. Check yours in **Settings** (bottom of the screen): `MochiLife <version> (build <code>)`.
 
+## 1.5 (build 6)
+- **Cleaner microphone**: the wake listener records in voice-call mode with the phone's echo canceller and noise suppressor (when the phone has them), so her voice and room noise are reduced before anything is recognised. Diagnostics shows which ones your phone provides.
+- **Interrupt her**: while she talks, say the wake phrase or "stop" (or tap the mic) and she stops at once. Her own voice saying those words is ignored.
+- **Faster answers**: quick things ("call Mom", "hi") use light thinking, real tasks (plans, recipes, bill splits, "why/how") use full thinking. The AI-energy check now runs at the same time as the AI call instead of before it. If a spoken answer takes longer than ~2 s she says "let me check" in your language.
+- **Custom wake names**: names the offline dictionary doesn't have are listened for through the closest-sounding words it knows ("Hi Elza" → "Hi Elsa" / "Hi Eliza"), or split into known pieces ("Mahsa" → "mah sa"). Close neighbours (e.g. "Ella") are added as decoys so they don't wake her.
+- **Voice log** (Settings → Diagnostics): what she heard, what was ignored as echo, wake-ups, interruptions, and how long each AI answer took (and at which thinking level). "Copy voice log" for bug reports.
+- Considered and rejected: switching the wake engine to sherpa-onnx. In side-by-side tests with natural-sounding speech it caught "Hey Mochi" only 1–2 times in 8 versus 7–8 for the current engine.
+
 ## 1.4 (build 5)
 - **Turn-by-turn voice (new default)**: tap the mic or say the wake phrase, speak once, and she answers. The always-open Gemini Live call (which heard background noise as random languages and could hear herself) is now an option: Settings → **Live voice chat (beta)**, off by default.
 - **Voice language** (Settings): speech is recognised only in the chosen language (Persian added), so noise can't come back as Japanese. She answers aloud in the language you spoke, with a matching voice. If what she heard is unclear, she asks you to repeat instead of guessing an action.

@@ -54,6 +54,38 @@ class CoreLogicTest {
     }
 
     @Test
+    fun `unknown names are listened for through sound-alikes`() {
+        val vocab = setOf("hi", "hey", "elsa", "eliza", "ella", "else", "mochi", "mah", "sa", "fatemeh")
+        val v = com.example.ai.WakeVocabulary
+        val elza = v.resolve(listOf("hi", "elza"), vocab)
+        assertTrue(elza.ok)
+        assertEquals(listOf(listOf("hi", "elsa"), listOf("hi", "eliza")), elza.variants)
+        assertEquals(listOf("elsa", "eliza"), elza.soundsLike["elza"])
+        assertTrue("ella" in elza.decoys || "else" in elza.decoys)
+        assertEquals(listOf(listOf("hi", "mah", "sa")), v.resolve(listOf("hi", "mahsa"), vocab).variants)
+        assertEquals(listOf(listOf("hi", "fatemeh")), v.resolve(listOf("hi", "fatemeh"), vocab).variants)
+        assertEquals(listOf("xqzw"), v.resolve(listOf("hi", "xqzw"), vocab).unresolved)
+        assertEquals(v.phoneticKey("elza"), v.phoneticKey("elsa"))
+        assertEquals(1, v.levenshtein("elza", "elsa"))
+        // Any of the variants wakes her.
+        val m = com.example.ai.WakePhraseMatcher(elza.variants, elza.decoys)
+        assertTrue(m.isWake(vosk("hi" to 1.0, "eliza" to 0.7)))
+        assertFalse(m.isWake(vosk("hi" to 1.0, "ella" to 0.9)))
+        assertTrue(m.grammarJson().contains("\"hi elsa\"") && m.grammarJson().contains("\"hi eliza\""))
+    }
+
+    @Test
+    fun `quick commands think lightly and real tasks think hard`() {
+        val r = com.example.ai.ThinkingRouter
+        assertEquals(com.example.ai.ThinkingRouter.Level.LOW, r.levelFor("call my mom on whatsapp"))
+        assertEquals(com.example.ai.ThinkingRouter.Level.LOW, r.levelFor("hi mochi"))
+        assertEquals(com.example.ai.ThinkingRouter.Level.HIGH, r.levelFor("plan my week with gym and work"))
+        assertEquals(com.example.ai.ThinkingRouter.Level.HIGH, r.levelFor("split the bill between four people"))
+        assertEquals(com.example.ai.ThinkingRouter.Level.HIGH, r.levelFor("لماذا أشعر بالتعب"))
+        assertEquals(com.example.ai.ThinkingRouter.Level.MEDIUM, r.levelFor("so today was really long and I went to the shop and then I met my friend at the park"))
+    }
+
+    @Test
     fun `custom wake phrases are validated`() {
         val w = com.example.ai.WakePhrases
         assertEquals(listOf("hello", "buddy"), w.normalise("  Hello   Buddy "))
@@ -81,8 +113,11 @@ class CoreLogicTest {
         assertTrue(guard.isEcho("calling your mother on whatsapp now"))
         assertFalse(guard.isEcho("call my brother instead"))
         assertFalse(guard.isEcho("yes"))
+        assertTrue(guard.saidRecently(listOf("calling", "mother")))
+        assertFalse(guard.saidRecently(listOf("stop")))
         now = 60_000L
         assertFalse(guard.isEcho("calling your mother on whatsapp now"))
+        assertFalse(guard.saidRecently(listOf("calling")))
     }
 
     @Test

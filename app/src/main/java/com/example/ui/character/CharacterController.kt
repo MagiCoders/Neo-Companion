@@ -225,6 +225,16 @@ class CharacterController(
      * while speaking audibly on the speaker stream (`TextToSpeech.speak`) and driving
      * `jawOpen`, `mouthO`, `mouthE`, and `mouthSmile` with 80ms attack / 150ms release smoothing.
      */
+    private var activeTts: TextToSpeech? = null
+    private val stopSpeakingHook: () -> Unit = { stopSpeaking() }
+
+    /** Cuts her off mid-sentence (the user interrupted). */
+    fun stopSpeaking() {
+        try { activeTts?.stop() } catch (_: Throwable) {}
+        speechJob?.cancel()
+        transitionTo(CharacterRuntimeState.Listening)
+    }
+
     /** The user's voice language (BCP-47); set from Settings by the view model. */
     @Volatile var defaultLanguageTag: String = java.util.Locale.getDefault().toLanguageTag()
 
@@ -242,7 +252,9 @@ class CharacterController(
         com.example.ai.VoiceCommandService.notifyAssistantSaid(cleanText)
 
         speechJob?.cancel()
+        activeTts = tts
         speechJob = scope.launch(Dispatchers.Main) {
+            com.example.ai.VoiceCommandService.registerSpeaker(stopSpeakingHook)
             // Close the mic while she talks so she never "hears" herself as a new command.
             com.example.ai.VoiceCommandService.notifyAssistantSpeaking(true)
             transitionTo(CharacterRuntimeState.Talking)
@@ -339,6 +351,7 @@ class CharacterController(
             } finally {
                 targetSpeechRms = 0f
                 activeWordBoost = 0f
+                com.example.ai.VoiceCommandService.unregisterSpeaker(stopSpeakingHook)
                 com.example.ai.VoiceCommandService.notifyAssistantSpeaking(false)
                 transitionTo(CharacterRuntimeState.Reacting("happy"))
             }

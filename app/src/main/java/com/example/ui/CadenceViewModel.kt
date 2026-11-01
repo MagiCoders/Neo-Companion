@@ -42,6 +42,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -834,17 +835,19 @@ class CadenceViewModel(
         viewModelScope.launch {
             _isCompanionThinking.value = true
             characterController.transitionTo(CharacterRuntimeState.Thinking)
+            // Spoken turns: if the answer takes a moment, say so instead of leaving silence.
+            val fillerJob = if (fromVoice) launch {
+                kotlinx.coroutines.delay(FILLER_AFTER_MS)
+                characterController.speakWithLipSync(context, tts, thinkingFiller(), activeChar)
+            } else null
             try {
-                // Offline/Firestore hiccups must not block chatting; only a real "0 left" does.
-                val hasCredit = uid == null || _userProfile.value.userId != uid ||
-                    runCatching { repository.consumeAiCreditOrThrow(uid, _userProfile.value) }.getOrDefault(true)
-                if (!hasCredit) {
-                    reportOutcome(context, tts, ActionOutcome.Failed("You've used today's AI energy. It refills tomorrow, or you can go Pro in Wallet."))
-                    characterController.transitionTo(CharacterRuntimeState.Idle)
-                    return@launch
+                // The energy check and the AI call run at the same time; the answer is only used
+                // if the check passes. Offline/Firestore hiccups must not block chatting.
+                val creditCheck = async {
+                    uid == null || _userProfile.value.userId != uid ||
+                        runCatching { repository.consumeAiCreditOrThrow(uid, _userProfile.value) }.getOrDefault(true)
                 }
-
-                val aiTurn = try {
+                val aiResult = runCatching {
                     voiceCommandService.processNaturalLanguageCommand(
                         commandText = clean,
                         companion = activeChar,
@@ -854,8 +857,17 @@ class CadenceViewModel(
                             com.example.ai.VoiceLanguages.tagFor(_settings.value.preferredLanguage)
                         )
                     )
-                } catch (e: AiUnavailableException) {
-                    reportOutcome(context, tts, ActionOutcome.Failed(e.message ?: "Something went wrong."))
+                }
+                fillerJob?.cancel()
+                if (!creditCheck.await()) {
+                    reportOutcome(context, tts, ActionOutcome.Failed("You've used today's AI energy. It refills tomorrow, or you can go Pro in Wallet."))
+                    characterController.transitionTo(CharacterRuntimeState.Idle)
+                    return@launch
+                }
+                val aiTurn = aiResult.getOrElse { e ->
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    val message = (e as? AiUnavailableException)?.message ?: "Something went wrong."
+                    reportOutcome(context, tts, ActionOutcome.Failed(message))
                     characterController.transitionTo(CharacterRuntimeState.Idle)
                     return@launch
                 }
@@ -911,10 +923,17 @@ class CadenceViewModel(
                 android.util.Log.w("CadenceViewModel", "Message handling failed: ${e.javaClass.simpleName}")
                 reportOutcome(context, tts, ActionOutcome.Failed("Something went wrong on my side. Please try again."))
             } finally {
+                fillerJob?.cancel()
                 _isCompanionThinking.value = false
                 voiceCommandService.clearAwaitingReply()
             }
         }
+    }
+
+    /** A short "let me check" in the user's voice language. */
+    private fun thinkingFiller(): String {
+        val tag = com.example.ai.VoiceLanguages.tagFor(_settings.value.preferredLanguage).substringBefore('-')
+        return THINKING_FILLERS[tag] ?: THINKING_FILLERS.getValue("en")
     }
 
     fun readMealStepsOutLoud(context: Context, tts: TextToSpeech?, meal: MealCreation?) {
@@ -1035,6 +1054,26 @@ class CadenceViewModel(
     }
 
     companion object {
+        /** Say a filler if the AI hasn't answered a spoken turn after this long. */
+        private const val FILLER_AFTER_MS = 1_800L
+        private val THINKING_FILLERS = mapOf(
+            "en" to "Let me check.",
+            "ar" to "لحظة، دعني أتحقق.",
+            "fa" to "یک لحظه، بذار ببینم.",
+            "fr" to "Je regarde.",
+            "es" to "Déjame ver.",
+            "de" to "Moment, ich schaue nach.",
+            "it" to "Fammi controllare.",
+            "pt" to "Deixa eu ver.",
+            "tr" to "Bir bakayım.",
+            "ru" to "Сейчас посмотрю.",
+            "ja" to "ちょっと確認しますね。",
+            "ko" to "잠깐 확인해 볼게요.",
+            "zh" to "我看一下。",
+            "hi" to "एक सेकंड, देखती हूँ।",
+            "ur" to "ایک لمحہ، دیکھتی ہوں۔",
+            "id" to "Sebentar, aku cek dulu."
+        )
         private val STOP_WORDS = Regex("(?i)^(stop|cancel|never ?mind|undo|توقف|الغاء|إلغاء|بس|لغو|annule|para|stopp)[.!]?$")
 
         fun provideFactory(context: Context): ViewModelProvider.Factory =

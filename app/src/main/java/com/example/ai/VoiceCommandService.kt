@@ -107,6 +107,12 @@ class VoiceCommandService(
             INSTANCE?.setAssistantSpeaking(speaking)
         }
 
+        /** Stops whoever is speaking right now (registered by CharacterController while it talks). */
+        private val activeSpeakers = java.util.concurrent.CopyOnWriteArraySet<() -> Unit>()
+
+        fun registerSpeaker(stop: () -> Unit) { activeSpeakers += stop }
+        fun unregisterSpeaker(stop: () -> Unit) { activeSpeakers -= stop }
+
         /** What the companion just said aloud, so an echo of it is never taken as a command. */
         fun notifyAssistantSaid(text: String) {
             INSTANCE?.let { svc -> svc.runOnMain { svc.echoGuard.remember(text) } }
@@ -251,23 +257,38 @@ class VoiceCommandService(
         }
     }
 
-    /** The phrase that wakes her ("hey mochi" or a custom one already checked with [unknownWakeWords]). */
+    private var wakePhraseTyped: List<String> = WakePhrases.normalise(WakePhrases.DEFAULT)!!
+
+    /**
+     * The phrase that wakes her, as the user typed it ("hi elza"). Words the offline model doesn't
+     * know are listened for through their closest sound-alikes (see [WakeVocabulary]).
+     */
     fun setWakePhrase(phrase: String) {
         runOnMain {
             val words = WakePhrases.normalise(phrase) ?: WakePhrases.normalise(WakePhrases.DEFAULT)!!
-            if (words == wakeMatcher.words) return@runOnMain
-            wakeMatcher = WakePhraseMatcher(words)
+            if (words == wakePhraseTyped) return@runOnMain
+            wakePhraseTyped = words
             wakeStripRegex = phraseRegex(words)
-            if (sessionKind == SessionKind.WAKE) {
-                cancelSession(destroy = false)
-                reevaluate()
+            wakeEngine.resolvePhrase(words) { resolution ->
+                if (words != wakePhraseTyped) return@resolvePhrase
+                wakeMatcher = if (resolution.ok) WakePhraseMatcher(resolution.variants, resolution.decoys)
+                else WakePhraseMatcher(words)
+                if (sessionKind == SessionKind.WAKE) {
+                    cancelSession(destroy = false)
+                    reevaluate()
+                }
             }
         }
     }
 
-    /** Words of a proposed custom wake phrase the offline engine can't listen for. */
-    fun unknownWakeWords(words: List<String>, onResult: (List<String>) -> Unit) =
-        wakeEngine.unknownWords(words, onResult)
+    /** Checks a proposed wake phrase: which sound-alikes would be used, or which words can't work. */
+    fun resolveWakePhrase(words: List<String>, onResult: (WakeVocabulary.Resolution) -> Unit) =
+        wakeEngine.resolvePhrase(words, onResult)
+
+    /** For Diagnostics: the wake variants listened for and the phone's audio clean-up. */
+    val wakeStatus: String
+        get() = "Listening for: " + wakeMatcher.variants.joinToString(" / ") { it.joinToString(" ") } +
+            "\nMicrophone clean-up: " + wakeEngine.lastAudioEffects
 
     fun setRecognitionLanguage(tag: String) {
         runOnMain { recognitionLanguage = tag.ifBlank { Locale.getDefault().toLanguageTag() } }
@@ -365,7 +386,10 @@ class VoiceCommandService(
                 awaitingReply = false
                 awaitReplyJob?.cancel()
                 restartListeningJob?.cancel()
-                cancelSession(destroy = false)
+                // A spoken request in progress ends; quiet wake listening carries on so the user
+                // can interrupt her by saying the wake phrase or "stop".
+                if (sessionKind == SessionKind.COMMAND) cancelSession(destroy = false)
+                reevaluate()
             } else if (followUpPending && hosts.isNotEmpty() && hasRecordPermission && !liveCallActive) {
                 // She asked something: listen for the answer once, after the speaker has gone quiet.
                 followUpPending = false
@@ -412,8 +436,13 @@ class VoiceCommandService(
         if (Looper.myLooper() == Looper.getMainLooper()) block() else mainHandler.post(block)
     }
 
-    private fun canUseMic(): Boolean =
-        hosts.isNotEmpty() && hasRecordPermission && !assistantSpeaking && !liveCallActive
+    /**
+     * Quiet offline listening is wanted when the wake word is on and she isn't busy answering, and
+     * also while she is talking, so "Hey Mochi" or "stop" can interrupt her.
+     */
+    private fun wantsWakeSession(): Boolean =
+        hosts.isNotEmpty() && hasRecordPermission && !liveCallActive && !wakeLoopSuspended &&
+            (assistantSpeaking || (_isWakeWordEnabled.value && !awaitingReply))
 
     fun setLiveCallActive(active: Boolean) {
         runOnMain {
@@ -425,29 +454,36 @@ class VoiceCommandService(
     /** Decides whether the passive wake loop should be running, and (re)starts it if so. */
     private fun reevaluate(delayMs: Long = 0L) {
         restartListeningJob?.cancel()
-        if (!canUseMic()) {
+        if (sessionKind == SessionKind.COMMAND) {
+            if (hosts.isEmpty() || !hasRecordPermission || liveCallActive) cancelSession(destroy = hosts.isEmpty())
+            return
+        }
+        if (!wantsWakeSession()) {
             if (sessionKind != null) cancelSession(destroy = hosts.isEmpty())
             return
         }
-        if (sessionKind != null) return
-        if (!_isWakeWordEnabled.value || wakeLoopSuspended || awaitingReply) return
+        if (sessionKind == SessionKind.WAKE) return
         if (delayMs <= 0L) {
-            startSession(SessionKind.WAKE)
+            startWakeListening()
         } else {
             restartListeningJob = scope.launch(Dispatchers.Main) {
                 delay(delayMs)
-                if (canUseMic() && sessionKind == null && _isWakeWordEnabled.value &&
-                    !wakeLoopSuspended && !awaitingReply
-                ) {
-                    startSession(SessionKind.WAKE)
-                }
+                if (sessionKind == null && wantsWakeSession()) startWakeListening()
             }
         }
     }
 
+    /** She is cut off mid-sentence. */
+    private fun bargeIn(reason: String) {
+        VoiceLog.add(VoiceLog.Kind.WAKE, reason)
+        followUpPending = false
+        assistantSpeaking = false
+        activeSpeakers.forEach { stop -> try { stop() } catch (_: Throwable) {} }
+    }
+
     /** Passive listening for the wake phrase: the offline engine, never the SpeechRecognizer loop. */
     private fun startWakeListening() {
-        if (!hasRecordPermission || !canUseMic()) return
+        if (!wantsWakeSession()) return
         if (!wakeEngine.isReady) {
             wakeEngine.prepare(
                 onReady = { reevaluate() },
@@ -462,10 +498,29 @@ class VoiceCommandService(
             onWake = {
                 onSessionEnded()
                 hardErrorCount = 0
-                // "Hey Mochi": open a live call if the app wants that, else take one spoken request.
+                if (assistantSpeaking) {
+                    if (echoGuard.saidRecently(wakeMatcher.words)) {
+                        // She said her own wake phrase out loud: that's not the user.
+                        VoiceLog.add(VoiceLog.Kind.IGNORED, "Heard the wake phrase in her own voice")
+                        reevaluate()
+                        return@start
+                    }
+                    bargeIn("Interrupted her with the wake phrase")
+                } else {
+                    VoiceLog.add(VoiceLog.Kind.WAKE, "Wake phrase heard")
+                }
+                // Open a live call if the user chose that, else take one spoken request.
                 onWakeWordOnly?.invoke() ?: startSession(SessionKind.COMMAND)
             },
-            onAbort = { if (_pendingAction.value != null) cancelPendingAction() },
+            onAbort = {
+                if (assistantSpeaking && !echoGuard.saidRecently(listOf("stop")) && !echoGuard.saidRecently(listOf("cancel"))) {
+                    bargeIn("Stopped her (\"stop\")")
+                }
+                if (_pendingAction.value != null) {
+                    VoiceLog.add(VoiceLog.Kind.WAKE, "Countdown cancelled by voice")
+                    cancelPendingAction()
+                }
+            },
             onError = { reason -> onHardError(reason, destroy = false) }
         )
         if (!started) {
@@ -485,11 +540,10 @@ class VoiceCommandService(
             return
         }
         if (!hasRecordPermission) return
-        if (kind == SessionKind.WAKE && !canUseMic()) return
         if (kind == SessionKind.COMMAND && (hosts.isEmpty() || assistantSpeaking)) {
             if (assistantSpeaking) {
                 // Tapping the mic while she talks means "let me speak": stop her and listen.
-                assistantSpeaking = false
+                bargeIn("Interrupted her with the mic button")
             } else {
                 return
             }
@@ -571,11 +625,12 @@ class VoiceCommandService(
     private fun deliverCommand(command: String) {
         if (echoGuard.isEcho(command)) {
             // The mic caught her own voice from the speaker: drop it, never answer herself.
-            Log.i(TAG, "Ignored an echo of the companion's own reply")
+            VoiceLog.add(VoiceLog.Kind.IGNORED, "Echo of her own voice: \"$command\"")
             reevaluate(delayMs = WAKE_RESTART_MS)
             return
         }
         val callback = onCommandRecognizedCallback ?: return
+        VoiceLog.add(VoiceLog.Kind.HEARD, "\"$command\" (${recognitionLanguage})")
         // Hold the wake loop until she has answered (or a timeout passes).
         awaitingReply = true
         awaitReplyJob?.cancel()
@@ -827,6 +882,12 @@ class EchoGuard(private val clock: () -> Long = System::currentTimeMillis) {
         if (words.isEmpty()) return
         recent.addLast(words.toSet() to clock())
         while (recent.size > 6) recent.removeFirst()
+    }
+
+    /** True when she said all of [words] in the last [WINDOW_MS] (her own voice, not the user's). */
+    fun saidRecently(words: List<String>): Boolean {
+        val now = clock()
+        return recent.any { (said, at) -> now - at <= WINDOW_MS && words.all { it.lowercase() in said } }
     }
 
     /** True when most words of [heard] are words she said in the last [WINDOW_MS]. */
