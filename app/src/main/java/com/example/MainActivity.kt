@@ -410,6 +410,10 @@ fun MochiAppHost(
             },
             onExecutePendingAction = { confirmedAction ->
                 viewModel.executeTurnActionNow(context, latestTts, confirmedAction.turn)
+            },
+            onAudioCaptured = { wav ->
+                if (viewModel.currentHashRoute.value == MochiHashRoutes.STAGE) showConversationSheet = true
+                viewModel.sendAudioToMochi(context, latestTts, wav)
             }
         )
         onDispose { viewModel.voiceCommandService.unbindCallbacks("app") }

@@ -28,12 +28,25 @@ class AppLauncher(private val context: Context) {
     fun open(spokenName: String): Result {
         val name = spokenName.trim()
         if (name.isEmpty()) return Result.Failed("Which app should I open?")
+        if (isFilesRequest(name)) return openFiles()
         val known = findKnown(name)
         if (known != null && isInstalled(known.pkg)) {
             return launchPackage(known.pkg, known.label)
         }
         findInstalledByLabel(name)?.let { (pkg, label) -> return launchPackage(pkg, label) }
-        return openInPlayStore(known?.pkg, known?.label ?: name)
+        // Google Play only for real, known apps; "internal storage" is not an app to download.
+        return if (known != null) openInPlayStore(known.pkg, known.label)
+        else Result.Failed("I couldn't find an app called \"$name\" on your phone.")
+    }
+
+    /** The phone's file manager (Samsung My Files, Files by Google, or Android's own file browser). */
+    fun openFiles(): Result {
+        for ((pkg, label) in FILE_MANAGERS) {
+            if (isInstalled(pkg)) return launchPackage(pkg, label)
+        }
+        val root = android.provider.DocumentsContract.buildRootUri("com.android.externalstorage.documents", "primary")
+        val browse = Intent(Intent.ACTION_VIEW).setDataAndType(root, android.provider.DocumentsContract.Root.MIME_TYPE_ITEM)
+        return if (start(browse)) Result.Opened("Files") else Result.Failed("I couldn't open your files.")
     }
 
     /** Opens the app's page in Google Play (or a Play search when the package is unknown). */
@@ -134,6 +147,18 @@ class AppLauncher(private val context: Context) {
             KnownApp("com.shazam.android", "Shazam", listOf("shazam", "شازام")),
             KnownApp(PLAY_STORE, "Google Play", listOf("play store", "google play", "متجر", "پلی استور"))
         )
+
+        val FILE_MANAGERS = listOf(
+            "com.sec.android.app.myfiles" to "My Files",
+            "com.google.android.apps.nbu.files" to "Files",
+            "com.mi.android.globalFileexplorer" to "File Manager",
+            "com.coloros.filemanager" to "File Manager"
+        )
+        private val FILES_WORDS = Regex(
+            "(?i)\\b(files?|file manager|my files|internal storage|storage|downloads?|documents)\\b|الملفات|ملفات|مدير الملفات|الذاكرة|التخزين|فایل|فایل‌ها|حافظه"
+        )
+
+        fun isFilesRequest(name: String) = FILES_WORDS.containsMatchIn(name)
 
         fun findKnown(name: String): KnownApp? {
             val n = normalise(name)

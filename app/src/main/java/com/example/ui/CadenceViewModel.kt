@@ -137,6 +137,8 @@ class CadenceViewModel(
             wakePhrase = prefs.getString("wakePhrase", com.example.ai.WakePhrases.DEFAULT) ?: com.example.ai.WakePhrases.DEFAULT,
             liveVoiceChat = prefs.getBoolean("liveVoiceChat", false),
             silentListening = prefs.getBoolean("silentListening", true),
+            aiListening = prefs.getBoolean("aiListening", true),
+            naturalVoice = prefs.getBoolean("naturalVoice", true),
             busyWatchingVideos = prefs.getBoolean("busyWatchingVideos", true),
             busyPlayingGames = prefs.getBoolean("busyPlayingGames", true),
             busyFullScreenApps = prefs.getBoolean("busyFullScreenApps", true),
@@ -209,6 +211,8 @@ class CadenceViewModel(
         voiceCommandService.setRecognitionLanguage(tag)
         voiceCommandService.setWakePhrase(s.wakePhrase)
         voiceCommandService.setSilentListening(s.silentListening)
+        voiceCommandService.setAiListening(s.aiListening)
+        com.example.ai.NaturalVoice.enabled = s.naturalVoice
         characterController.defaultLanguageTag = tag
     }
 
@@ -224,6 +228,8 @@ class CadenceViewModel(
             .putString("wakePhrase", updated.wakePhrase)
             .putBoolean("liveVoiceChat", updated.liveVoiceChat)
             .putBoolean("silentListening", updated.silentListening)
+            .putBoolean("aiListening", updated.aiListening)
+            .putBoolean("naturalVoice", updated.naturalVoice)
             .putString("preferredLanguage", updated.preferredLanguage)
             .putBoolean("floatingCompanionEnabled", updated.floatingCompanionEnabled)
             .putBoolean("wakeWordEnabled", updated.wakeWordEnabled)
@@ -388,6 +394,11 @@ class CadenceViewModel(
             turn = turn,
             character = _selectedCharacter.value,
             onNavigateHashRoute = { route -> navigateHash(route) }
+        )
+        com.example.ai.VoiceLog.add(
+            if (outcome is ActionOutcome.Failed) com.example.ai.VoiceLog.Kind.ERROR else com.example.ai.VoiceLog.Kind.AI,
+            "Action ${turn.actionType.name} → ${outcome.javaClass.simpleName}: ${outcome.spoken.take(100)}" +
+                if (turn.actionPayload.isNotBlank()) " [${turn.actionPayload.take(80)}]" else ""
         )
         if (leavesApp && outcome is ActionOutcome.Done) {
             if (turn.actionType in ENDS_CONVERSATION) {
@@ -569,10 +580,10 @@ class CadenceViewModel(
                 }
                 is com.example.actions.YouTubeSearch.Result.Found -> {
                     val videos = result.videos
-                    val chosen = com.example.actions.YouTubeSearch.pick(videos, query)
-                    when {
-                        videos.isEmpty() -> reportOutcome(context, tts, ActionOutcome.Failed("I couldn't find \"$query\" on YouTube."))
-                        chosen != null -> playVideo(context, tts, chosen)
+                    // The user picks from the results (one result plays straight away).
+                    when (videos.size) {
+                        0 -> reportOutcome(context, tts, ActionOutcome.Failed("I couldn't find \"$query\" on YouTube."))
+                        1 -> playVideo(context, tts, videos.first())
                         else -> askWhichVideo(context, tts, videos.take(4))
                     }
                 }
@@ -1085,86 +1096,192 @@ class CadenceViewModel(
                 }
                 }
 
-                _currentStressPercent.value = aiTurn.angerOrStressPercent
-                _currentMoodTone.value = aiTurn.detectedTone
-
-                // Check the action before announcing it, so she never says "Calling Mom" for a contact that doesn't exist.
-                fun prepareTurn(t: CompanionChatTurn) = when (t.actionType) {
-                    CompanionActionType.NONE, CompanionActionType.SPEAK_LOUD,
-                    CompanionActionType.NAVIGATE_ROUTE, CompanionActionType.WHATS_PLAYING,
-                    CompanionActionType.SET_VOICE_LANGUAGE -> null
-                    else -> ActionExecutor(context).prepare(t)
-                }
-                var preparation = prepareTurn(aiTurn)
-                // Understood on the phone, but the person wasn't found for sure ("Ali audits"):
-                // ask the AI once for the name's other spellings before asking the user to choose.
-                val blockedOutcome = (preparation as? Preparation.Blocked)?.outcome
-                if (localTurn != null && blockedOutcome != null && blockedOutcome !is ActionOutcome.NeedsPermission &&
-                    aiTurn.actionType in ActionExecutor.PERSON_ACTIONS
-                ) {
-                    com.example.ai.VoiceLog.add(com.example.ai.VoiceLog.Kind.AI, "Name not certain; asking the AI for spellings")
-                    runCatching {
-                        voiceCommandService.processNaturalLanguageCommand(
-                            commandText = clean, companion = activeChar, userName = _settings.value.userName,
-                            history = emptyList(),
-                            preferredLanguage = com.example.ai.VoiceLanguages.promptName(com.example.ai.VoiceLanguages.tagFor(_settings.value.preferredLanguage))
-                        )
-                    }.getOrNull()?.takeIf { it.actionType in ActionExecutor.PERSON_ACTIONS }?.let { retry ->
-                        aiTurn = retry
-                        preparation = prepareTurn(retry)
-                    }
-                }
-                if (preparation is Preparation.Blocked) {
-                    val blockedTurn = aiTurn.copy(
-                        message = preparation.outcome.spoken,
-                        spokenConfirmation = preparation.outcome.spoken,
-                        actionType = CompanionActionType.NONE,
-                        isActionReport = true
-                    )
-                    _chatHistory.value = _chatHistory.value + blockedTurn
-                    if (preparation.outcome is ActionOutcome.NeedsPermission) {
-                        _permissionRequests.tryEmit((preparation.outcome as ActionOutcome.NeedsPermission).permission)
-                    }
-                    characterController.speakWithLipSync(context, tts, blockedTurn.message, activeChar, aiTurn.detectedLanguage)
-                    return@launch
-                }
-
-                _chatHistory.value = _chatHistory.value + aiTurn
-                // "Switch to Arabic": change the voice language first, so her reply is spoken in it
-                // and the next thing the user says is recognised in it.
-                var replyLanguage = aiTurn.detectedLanguage
-                if (aiTurn.actionType == CompanionActionType.SET_VOICE_LANGUAGE) {
-                    switchVoiceLanguage(aiTurn.actionPayload)?.let { replyLanguage = it }
-                }
-                characterController.speakWithLipSync(context, tts, aiTurn.message, activeChar, replyLanguage)
-
-                when (aiTurn.actionType) {
-                    CompanionActionType.NONE, CompanionActionType.SPEAK_LOUD,
-                    CompanionActionType.SET_VOICE_LANGUAGE -> Unit
-                    // Harmless and instant: no countdown.
-                    CompanionActionType.NAVIGATE_ROUTE, CompanionActionType.WHATS_PLAYING,
-                    CompanionActionType.READ_MESSAGES, CompanionActionType.OPEN_APP,
-                    CompanionActionType.WHATSAPP_SEND_MEDIA, CompanionActionType.SET_ALARM,
-                    CompanionActionType.SET_TIMER, CompanionActionType.SHOW_ALARMS ->
-                        executeTurnActionNow(context, tts, aiTurn)
-                    CompanionActionType.YOUTUBE -> playYouTube(context, tts, aiTurn)
-                    else -> {
-                        val ready = (preparation as Preparation.Ready).action
-                        voiceCommandService.scheduleActionWithUndoWindow(
-                            turn = aiTurn,
-                            durationSeconds = 3,
-                            titleOverride = ready.title
-                        ) { confirmed ->
-                            executeTurnActionNow(context, tts, confirmed.turn)
-                        }
-                    }
-                }
+                handleCompanionTurn(context, tts, aiTurn, clean, localTurn, activeChar)
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 android.util.Log.w("CadenceViewModel", "Message handling failed: ${e.javaClass.simpleName}")
                 reportOutcome(context, tts, ActionOutcome.Failed("Something went wrong on my side. Please try again."))
             } finally {
                 fillerJob?.cancel()
+                _isCompanionThinking.value = false
+                voiceCommandService.clearAwaitingReply()
+            }
+        }
+    }
+
+    /**
+     * What happens with the companion's answer, for typed and spoken turns alike: check the action
+     * (so she never announces a call to a contact that doesn't exist), say the reply, then run the
+     * action now or after the 3-second countdown.
+     */
+    private suspend fun handleCompanionTurn(
+        context: Context,
+        tts: TextToSpeech?,
+        firstTurn: CompanionChatTurn,
+        clean: String,
+        localTurn: CompanionChatTurn?,
+        activeChar: CharacterSpec
+    ) {
+        var aiTurn = firstTurn
+        _currentStressPercent.value = aiTurn.angerOrStressPercent
+        _currentMoodTone.value = aiTurn.detectedTone
+
+        // Check the action before announcing it, so she never says "Calling Mom" for a contact that doesn't exist.
+        fun prepareTurn(t: CompanionChatTurn) = when (t.actionType) {
+            CompanionActionType.NONE, CompanionActionType.SPEAK_LOUD,
+            CompanionActionType.NAVIGATE_ROUTE, CompanionActionType.WHATS_PLAYING,
+            CompanionActionType.SET_VOICE_LANGUAGE -> null
+            else -> ActionExecutor(context).prepare(t)
+        }
+        var preparation = prepareTurn(aiTurn)
+        // Understood on the phone, but the person wasn't found for sure ("Ali audits"):
+        // ask the AI once for the name's other spellings before asking the user to choose.
+        val blockedOutcome = (preparation as? Preparation.Blocked)?.outcome
+        if (localTurn != null && blockedOutcome != null && blockedOutcome !is ActionOutcome.NeedsPermission &&
+            aiTurn.actionType in ActionExecutor.PERSON_ACTIONS
+        ) {
+            com.example.ai.VoiceLog.add(com.example.ai.VoiceLog.Kind.AI, "Name not certain; asking the AI for spellings")
+            runCatching {
+                voiceCommandService.processNaturalLanguageCommand(
+                    commandText = clean, companion = activeChar, userName = _settings.value.userName,
+                    history = emptyList(),
+                    preferredLanguage = com.example.ai.VoiceLanguages.promptName(com.example.ai.VoiceLanguages.tagFor(_settings.value.preferredLanguage))
+                )
+            }.getOrNull()?.takeIf { it.actionType in ActionExecutor.PERSON_ACTIONS }?.let { retry ->
+                aiTurn = retry
+                preparation = prepareTurn(retry)
+            }
+        }
+        if (preparation is Preparation.Blocked) {
+            val blockedTurn = aiTurn.copy(
+                message = preparation.outcome.spoken,
+                spokenConfirmation = preparation.outcome.spoken,
+                actionType = CompanionActionType.NONE,
+                isActionReport = true
+            )
+            _chatHistory.value = _chatHistory.value + blockedTurn
+            if (preparation.outcome is ActionOutcome.NeedsPermission) {
+                _permissionRequests.tryEmit((preparation.outcome as ActionOutcome.NeedsPermission).permission)
+            }
+            characterController.speakWithLipSync(context, tts, blockedTurn.message, activeChar, aiTurn.detectedLanguage)
+            return
+        }
+
+        _chatHistory.value = _chatHistory.value + aiTurn
+        // "Switch to Arabic": change the voice language first, so her reply is spoken in it
+        // and the next thing the user says is recognised in it.
+        var replyLanguage = aiTurn.detectedLanguage
+        if (aiTurn.actionType == CompanionActionType.SET_VOICE_LANGUAGE) {
+            switchVoiceLanguage(aiTurn.actionPayload)?.let { replyLanguage = it }
+        }
+        characterController.speakWithLipSync(context, tts, aiTurn.message, activeChar, replyLanguage)
+
+        when (aiTurn.actionType) {
+            CompanionActionType.NONE, CompanionActionType.SPEAK_LOUD,
+            CompanionActionType.SET_VOICE_LANGUAGE -> Unit
+            // Harmless and instant: no countdown.
+            CompanionActionType.NAVIGATE_ROUTE, CompanionActionType.WHATS_PLAYING,
+            CompanionActionType.READ_MESSAGES, CompanionActionType.OPEN_APP,
+            CompanionActionType.WHATSAPP_SEND_MEDIA, CompanionActionType.SET_ALARM,
+            CompanionActionType.SET_TIMER, CompanionActionType.SHOW_ALARMS ->
+                executeTurnActionNow(context, tts, aiTurn)
+            CompanionActionType.YOUTUBE -> playYouTube(context, tts, aiTurn)
+            else -> {
+                val ready = (preparation as Preparation.Ready).action
+                voiceCommandService.scheduleActionWithUndoWindow(
+                    turn = aiTurn,
+                    durationSeconds = 3,
+                    titleOverride = ready.title
+                ) { confirmed ->
+                    executeTurnActionNow(context, tts, confirmed.turn)
+                }
+            }
+        }
+    }
+
+    /**
+     * A spoken turn: the recording goes straight to the AI, which hears it in any language and
+     * answers in the same request (no on-phone speech-to-text).
+     */
+    fun sendAudioToMochi(context: Context, tts: TextToSpeech?, wav: ByteArray) {
+        if (_isCompanionThinking.value) { voiceCommandService.clearAwaitingReply(); return }
+        val uid = _currentUserId.value
+        val activeChar = _selectedCharacter.value
+        val history = _chatHistory.value
+        viewModelScope.launch {
+            _isCompanionThinking.value = true
+            characterController.transitionTo(CharacterRuntimeState.Thinking)
+            val fillerJob = launch {
+                kotlinx.coroutines.delay(FILLER_AFTER_MS)
+                characterController.speakWithLipSync(context, tts, thinkingFiller(), activeChar)
+            }
+            try {
+                val creditCheck = async {
+                    uid == null || _userProfile.value.userId != uid ||
+                        runCatching { repository.consumeAiCreditOrThrow(uid, _userProfile.value) }.getOrDefault(true)
+                }
+                val result = runCatching {
+                    voiceCommandService.understandAudio(
+                        wav = wav,
+                        companion = activeChar,
+                        userName = _settings.value.userName,
+                        history = history.filterNot { it.isActionReport },
+                        preferredLanguage = com.example.ai.VoiceLanguages.promptName(com.example.ai.VoiceLanguages.tagFor(_settings.value.preferredLanguage))
+                    )
+                }
+                fillerJob.cancel()
+                if (!creditCheck.await()) {
+                    reportOutcome(context, tts, ActionOutcome.Failed("You've used today's AI energy. It refills tomorrow, or you can go Pro in Wallet."))
+                    characterController.transitionTo(CharacterRuntimeState.Idle)
+                    return@launch
+                }
+                val (heard, turn) = result.getOrElse { e ->
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    if (com.example.ai.AiDiagnostics.classify(e.cause ?: e) == com.example.ai.AiDiagnostics.Reason.QUOTA) {
+                        // Out of AI quota: keep working with the phone's recogniser for an hour.
+                        voiceCommandService.usePhoneRecognizerFor(60)
+                    }
+                    reportOutcome(context, tts, ActionOutcome.Failed((e as? AiUnavailableException)?.message ?: "Something went wrong."))
+                    characterController.transitionTo(CharacterRuntimeState.Idle)
+                    return@launch
+                }
+                if (heard.isEmpty() || turn == null) {
+                    characterController.transitionTo(CharacterRuntimeState.Idle)
+                    voiceCommandService.onNothingForMe()
+                    return@launch
+                }
+                voiceCommandService.onUserSaid(heard)
+                _chatHistory.value = _chatHistory.value + CompanionChatTurn(id = UUID.randomUUID().toString(), senderIsUser = true, message = heard)
+
+                // "Stop" / "cancel", picking a video, or switching language: handled on the phone.
+                if (STOP_WORDS.matches(heard)) {
+                    cancelPendingVoiceAction()
+                    characterController.transitionTo(CharacterRuntimeState.Idle)
+                    return@launch
+                }
+                pendingVideoChoices?.let { choices ->
+                    val index = com.example.ai.LocalCommands.parseChoice(heard, choices.size)
+                    pendingVideoChoices = null
+                    if (index != null) {
+                        if (index >= 0) playVideo(context, tts, choices[index]) else reportOutcome(context, tts, ActionOutcome.Done("Okay.", speak = true))
+                        return@launch
+                    }
+                }
+                com.example.ai.LanguageSwitch.detect(heard)?.let { requested ->
+                    switchVoiceLanguage(requested)?.let { tag ->
+                        val confirmation = com.example.ai.LanguageSwitch.confirmation(tag)
+                        _chatHistory.value = _chatHistory.value + CompanionChatTurn(id = UUID.randomUUID().toString(), senderIsUser = false, message = confirmation, isActionReport = true)
+                        characterController.speakWithLipSync(context, tts, confirmation, activeChar, tag)
+                        return@launch
+                    }
+                }
+                handleCompanionTurn(context, tts, turn, heard, null, activeChar)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                android.util.Log.w("CadenceViewModel", "Audio turn failed: ${e.javaClass.simpleName}")
+                reportOutcome(context, tts, ActionOutcome.Failed("Something went wrong on my side. Please try again."))
+            } finally {
+                fillerJob.cancel()
                 _isCompanionThinking.value = false
                 voiceCommandService.clearAwaitingReply()
             }

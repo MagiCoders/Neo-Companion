@@ -71,8 +71,10 @@ class VoiceCommandService(
         )
         /** Ends a conversation (she replies once more, then stops listening). */
         val GOODBYE_REGEX = Regex(
-            "(?i)\\b(bye|goodbye|good night|that'?s all|that is all|stop listening|go to sleep|see you|thanks,? that'?s it|nothing else)\\b|" +
-                "مع السلامة|باي|تصبح على خير|خلاص|بس كذا|خداحافظ|شب بخیر|بسه|ممنون،? همین"
+            "(?i)\\b(bye|goodbye|good night|that'?s all|that is all|stop listening|go to sleep|see you|thanks,? that'?s it|nothing else|nothing more)\\b|" +
+                // A plain "no" / "no thanks" (the answer to "anything else?").
+                "(?i)^\\s*(no|nope|nah|no thanks|no thank you|not now|i'?m good|that'?s it)[.!,]?\\s*(thanks|thank you)?[.!]?\\s*$|" +
+                "مع السلامة|باي|تصبح على خير|خلاص|بس كذا|خداحافظ|شب بخیر|بسه|ممنون،? همین|^\\s*لا\\s*(شكرا|شكراً|ماكو|ماريد)?\\s*$|ماكو شي|^\\s*نه\\s*(ممنون|مرسی|مرسي)?\\s*$|چیزی نمی‌خوام"
         )
         private val ABORT_COMMAND_REGEX = Regex(
             "(?i)^(stop|cancel|undo|abort|wait|don't|do not|never mind|nevermind)[.!]?$"
@@ -136,7 +138,9 @@ class VoiceCommandService(
 
     private class CallbackSet(
         val onCommand: (String) -> Unit,
-        val onExecutePending: (PendingVoiceAction) -> Unit
+        val onExecutePending: (PendingVoiceAction) -> Unit,
+        /** Spoken turn as audio for the AI to hear directly (null: this owner only takes text). */
+        val onAudio: ((ByteArray) -> Unit)? = null
     )
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -276,6 +280,27 @@ class VoiceCommandService(
     private val onCommandRecognizedCallback: ((String) -> Unit)?
         get() = callbackStack.lastOrNull()?.second?.onCommand
 
+    private val onAudioCallback: ((ByteArray) -> Unit)?
+        get() = callbackStack.lastOrNull()?.second?.onAudio
+
+    // ---- Listening engine: the AI hears the audio (default), or the phone's recogniser ----
+    private var capture: SpeechCapture? = null
+    @Volatile private var aiListening = true
+    /** After a quota error the phone's recogniser is used until this time. */
+    @Volatile private var phoneRecognizerUntil = 0L
+
+    /** Settings → "AI listening". */
+    fun setAiListening(enabled: Boolean) { aiListening = enabled }
+
+    /** The AI can't hear right now (e.g. quota): use the phone's recogniser for a while. */
+    fun usePhoneRecognizerFor(minutes: Int) {
+        phoneRecognizerUntil = System.currentTimeMillis() + minutes * 60_000L
+        VoiceLog.add(VoiceLog.Kind.ERROR, "AI listening paused for $minutes min; using the phone's speech recogniser")
+    }
+
+    private fun useAiListening(): Boolean =
+        aiListening && onAudioCallback != null && System.currentTimeMillis() >= phoneRecognizerUntil
+
     private val onExecutePendingActionCallback: ((PendingVoiceAction) -> Unit)?
         get() = pendingExecuteOverride ?: callbackStack.lastOrNull()?.second?.onExecutePending
 
@@ -293,11 +318,12 @@ class VoiceCommandService(
     fun bindCallbacks(
         owner: String,
         onCommandRecognized: (String) -> Unit,
-        onExecutePendingAction: (PendingVoiceAction) -> Unit
+        onExecutePendingAction: (PendingVoiceAction) -> Unit,
+        onAudioCaptured: ((ByteArray) -> Unit)? = null
     ) {
         runOnMain {
             callbackStack.removeAll { it.first == owner }
-            callbackStack.add(owner to CallbackSet(onCommandRecognized, onExecutePendingAction))
+            callbackStack.add(owner to CallbackSet(onCommandRecognized, onExecutePendingAction, onAudioCaptured))
         }
     }
 
@@ -642,8 +668,84 @@ class VoiceCommandService(
         _isWakeLoopRunning.value = true
     }
 
+    /** One spoken turn recorded for the AI (see [SpeechCapture]): any language, no beeps. */
+    private fun startCapture() {
+        restartListeningJob?.cancel()
+        if (sessionKind != null) cancelSession(destroy = false)
+        val c = SpeechCapture(
+            onLevel = { db -> if (sessionKind == SessionKind.COMMAND) _micRmsDb.value = ((db - 30f) / 4f).coerceIn(0f, 10f) },
+            onSpeechStarted = { _livePartialTranscript.value = "…" },
+            onUtterance = { wav ->
+                capture = null
+                onSessionEnded()
+                hardErrorCount = 0
+                _livePartialTranscript.value = ""
+                deliverAudio(wav)
+            },
+            onNoSpeech = {
+                capture = null
+                VoiceLog.add(VoiceLog.Kind.IGNORED, "No speech heard")
+                onSessionEnded()
+                _livePartialTranscript.value = ""
+                handleQuietTurn(notUnderstood = false)
+            },
+            onError = { reason ->
+                capture = null
+                VoiceLog.add(VoiceLog.Kind.ERROR, reason)
+                onHardError(reason, destroy = false)
+            }
+        )
+        capture = c
+        sessionKind = SessionKind.COMMAND
+        _wakeWordArmed.value = true
+        _isActivelyListening.value = true
+        _isWakeLoopRunning.value = false
+        _livePartialTranscript.value = ""
+        c.start()
+        VoiceLog.add(VoiceLog.Kind.HEARD, "Mic open, the AI is listening (any language)")
+    }
+
+    private fun deliverAudio(wav: ByteArray) {
+        val callback = onAudioCallback ?: return
+        VoiceLog.add(VoiceLog.Kind.HEARD, "Sent %.1f s of speech to the AI".format((wav.size - 44) / 32_000.0))
+        awaitingReply = true
+        awaitReplyJob?.cancel()
+        awaitReplyJob = scope.launch(Dispatchers.Main) {
+            delay(AWAIT_REPLY_TIMEOUT_MS)
+            awaitingReply = false
+            reevaluate()
+        }
+        callback(wav)
+    }
+
+    /** The AI heard the user say [transcript] (an audio turn). */
+    fun onUserSaid(transcript: String) {
+        runOnMain {
+            VoiceLog.add(VoiceLog.Kind.HEARD, "\"$transcript\"")
+            quietTurns = 0
+            userTurns++
+            if (GOODBYE_REGEX.containsMatchIn(transcript)) endConversation("goodbye")
+        }
+    }
+
+    /** The AI found no clear speech for her in the recording (noise, other people): listen again quietly. */
+    fun onNothingForMe() {
+        runOnMain {
+            VoiceLog.add(VoiceLog.Kind.IGNORED, "The AI heard no request (noise or other people)")
+            awaitReplyJob?.cancel()
+            awaitingReply = false
+            handleQuietTurn(notUnderstood = true, silent = true)
+        }
+    }
+
     private fun startSession(kind: SessionKind) {
         if (kind == SessionKind.WAKE) { startWakeListening(); return }
+        if (kind == SessionKind.COMMAND && useAiListening() && hasRecordPermission) {
+            if (assistantSpeaking) bargeIn("Interrupted her with the mic button")
+            if (hosts.isEmpty()) return
+            startCapture()
+            return
+        }
         if (!SpeechRecognizer.isRecognitionAvailable(appContext)) {
             _lastError.value = "Speech recognition isn't available on this device."
             return
@@ -701,6 +803,8 @@ class VoiceCommandService(
 
     private fun cancelSession(destroy: Boolean) {
         beeps.unmute()
+        capture?.stop()
+        capture = null
         if (sessionKind == SessionKind.COMMAND) commandEndedAt = System.currentTimeMillis()
         val hadSession = sessionKind != null
         sessionKind = null
@@ -776,7 +880,7 @@ class VoiceCommandService(
      * or "Anything else?" and listen again. Second time: a polite goodbye, then quiet wake
      * listening. Outside a conversation: just go back to wake listening.
      */
-    private fun handleQuietTurn(notUnderstood: Boolean) {
+    private fun handleQuietTurn(notUnderstood: Boolean, silent: Boolean = false) {
         val idle = onConversationIdle
         if (!conversationActive || idle == null) {
             endConversation("no reply")
@@ -797,6 +901,8 @@ class VoiceCommandService(
                 idle(Idle.GOODBYE)
                 reevaluate(delayMs = WAKE_RESTART_MS)
             }
+            // Background noise only: just listen again, without "sorry?".
+            silent -> startSession(SessionKind.COMMAND)
             notUnderstood -> idle(Idle.NOT_UNDERSTOOD)   // conversation stays on: mic reopens after she speaks
             else -> idle(Idle.ASK_ANYTHING_ELSE)
         }
@@ -895,6 +1001,15 @@ class VoiceCommandService(
     }
 
     /** Understands one utterance. Throws [AiUnavailableException] when the AI can't answer. */
+    /** A spoken turn as audio → (what the user said, the companion's answer or null for noise). */
+    suspend fun understandAudio(
+        wav: ByteArray,
+        companion: CharacterSpec,
+        userName: String,
+        history: List<CompanionChatTurn>,
+        preferredLanguage: String
+    ): Pair<String, CompanionChatTurn?> = brain.understandAudio(wav, companion, userName, history, preferredLanguage)
+
     suspend fun processNaturalLanguageCommand(
         commandText: String,
         companion: CharacterSpec,

@@ -10,6 +10,7 @@ import com.example.actions.RelationshipAliases
 import com.example.ai.PromptSafety
 import com.example.ai.ReceiptMath
 import com.example.data.CompanionActionType
+import com.example.ai.VoiceActivity.Event as VadEvent
 import com.example.data.CompanionChatTurn
 import com.example.data.MochiHashRoutes
 import com.example.ui.CadenceViewModel
@@ -221,6 +222,62 @@ class CoreLogicTest {
         assertEquals(java.time.LocalDate.of(2026, 11, 1), a.nextRingDate(23, 0, evening))
         assertEquals("1 hour 30 minutes", a.describeDuration(5400))
         assertEquals("every day", a.describeDays(java.time.DayOfWeek.entries.toList()))
+    }
+
+    @Test
+    fun `voice activity starts on speech, ignores bumps and waits for a real pause`() {
+        val vad = com.example.ai.VoiceActivity(endSilenceMs = 300, noSpeechTimeoutMs = 3_000)
+        repeat(10) { assertEquals(VadEvent.SILENCE, vad.feed(80.0)) }           // quiet room
+        repeat(4) { assertEquals(VadEvent.SILENCE, vad.feed(2_000.0)) }         // not yet 150 ms
+        assertEquals(VadEvent.SPEECH_START, vad.feed(2_000.0))
+        repeat(20) { assertEquals(VadEvent.IN_SPEECH, vad.feed(1_800.0)) }
+        repeat(9) { assertEquals(VadEvent.IN_SPEECH, vad.feed(80.0)) }          // a short pause is not the end
+        assertEquals(VadEvent.SPEECH_END, vad.feed(80.0))
+
+        val bump = com.example.ai.VoiceActivity(endSilenceMs = 300, noSpeechTimeoutMs = 3_000)
+        repeat(10) { bump.feed(80.0) }
+        repeat(5) { bump.feed(3_000.0) }                                  // a cough
+        val events = (0 until 12).map { bump.feed(80.0) }
+        assertTrue(VadEvent.FALSE_START in events)
+
+        val nobody = com.example.ai.VoiceActivity(noSpeechTimeoutMs = 300)
+        assertEquals(VadEvent.TIMEOUT, (0 until 20).map { nobody.feed(80.0) }.first { it != VadEvent.SILENCE })
+    }
+
+    @Test
+    fun `recordings are sent as valid 16 kHz wav`() {
+        val wav = com.example.ai.SpeechCapture.wav(ByteArray(3_200))
+        assertEquals("RIFF", String(wav, 0, 4))
+        assertEquals("WAVE", String(wav, 8, 4))
+        assertEquals(44 + 3_200, wav.size)
+        val rate = java.nio.ByteBuffer.wrap(wav, 24, 4).order(java.nio.ByteOrder.LITTLE_ENDIAN).int
+        assertEquals(16_000, rate)
+    }
+
+    @Test
+    fun `no thanks ends the conversation`() {
+        val g = com.example.ai.VoiceCommandService.GOODBYE_REGEX
+        listOf("no thank you", "No thanks.", "nope", "لا شكرا", "لا", "نه ممنون", "I'm good").forEach { assertTrue(it, g.containsMatchIn(it)) }
+        listOf("no, call my mother instead", "now open YouTube", "nothing is working").forEach { assertFalse(it, g.containsMatchIn(it)) }
+    }
+
+    @Test
+    fun `natural voice asks for the right accent`() {
+        val n = com.example.ai.NaturalVoice
+        assertEquals("Iraqi Arabic (Baghdadi)", n.accentFor("ar-IQ"))
+        assertEquals("Persian (Tehrani)", n.accentFor("fa-IR"))
+        assertEquals("", n.accentFor("en-US"))
+        assertTrue(n.direction("هلا", "ar-IQ").contains("Iraqi") && n.direction("هلا", "ar-IQ").endsWith("هلا"))
+    }
+
+    @Test
+    fun `files and unknown names never send the user to Google Play`() {
+        val a = com.example.actions.AppLauncher
+        assertTrue(a.isFilesRequest("internal storage"))
+        assertTrue(a.isFilesRequest("الملفات"))
+        assertFalse(a.isFilesRequest("YouTube"))
+        val r = com.example.actions.AppLauncher(context).open("Banana Planner")
+        assertTrue(r is com.example.actions.AppLauncher.Result.Failed)
     }
 
     @Test

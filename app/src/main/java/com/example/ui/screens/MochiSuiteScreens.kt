@@ -786,6 +786,26 @@ fun ProfileAndSettingsScreen(
             HairlineDivider(p.hairline)
             SettingsIconToggleRow(
                 icon = Icons.Outlined.Mic,
+                title = "AI listening",
+                subtitle = "The AI hears your voice directly: any language or mix, names spelled right. Off: the phone's recogniser (one language, works without AI quota).",
+                checked = settings.aiListening,
+                accent = accent,
+                palette = p,
+                onCheckedChange = { enabled -> onUpdateSettings { it.copy(aiListening = enabled) } }
+            )
+            HairlineDivider(p.hairline)
+            SettingsIconToggleRow(
+                icon = Icons.Outlined.GraphicEq,
+                title = "Natural voice",
+                subtitle = "Human-sounding AI voice with real accents (Iraqi Arabic, Persian…). Adds a moment before she speaks and uses AI quota. Off: the phone's voice.",
+                checked = settings.naturalVoice,
+                accent = accent,
+                palette = p,
+                onCheckedChange = { enabled -> onUpdateSettings { it.copy(naturalVoice = enabled) } }
+            )
+            HairlineDivider(p.hairline)
+            SettingsIconToggleRow(
+                icon = Icons.Outlined.Mic,
                 title = "Silent listening",
                 subtitle = "Hides the beep when the microphone opens and closes",
                 checked = settings.silentListening,

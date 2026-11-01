@@ -226,11 +226,46 @@ class CharacterController(
      * `jawOpen`, `mouthO`, `mouthE`, and `mouthSmile` with 80ms attack / 150ms release smoothing.
      */
     private var activeTts: TextToSpeech? = null
+    @Volatile private var activeTrack: android.media.AudioTrack? = null
+
+    /** Plays natural-voice audio and moves her mouth with its real loudness. */
+    private suspend fun playNatural(audio: com.example.ai.NaturalVoice.Audio) {
+        val minBuf = android.media.AudioTrack.getMinBufferSize(audio.sampleRate, android.media.AudioFormat.CHANNEL_OUT_MONO, android.media.AudioFormat.ENCODING_PCM_16BIT)
+        val track = android.media.AudioTrack.Builder()
+            .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+            .setAudioFormat(android.media.AudioFormat.Builder().setSampleRate(audio.sampleRate).setChannelMask(android.media.AudioFormat.CHANNEL_OUT_MONO).setEncoding(android.media.AudioFormat.ENCODING_PCM_16BIT).build())
+            .setBufferSizeInBytes(maxOf(minBuf, audio.sampleRate / 5 * 2))
+            .setTransferMode(android.media.AudioTrack.MODE_STREAM)
+            .build()
+        activeTrack = track
+        try {
+            track.play()
+            kotlinx.coroutines.withContext(Dispatchers.IO) {
+                val chunk = audio.sampleRate / 25 // 40 ms
+                var pos = 0
+                while (pos < audio.pcm.size && isActive) {
+                    val end = minOf(pos + chunk, audio.pcm.size)
+                    var sum = 0.0
+                    for (i in pos until end) { val v = audio.pcm[i] / 32768.0; sum += v * v }
+                    targetSpeechRms = (sqrt(sum / (end - pos)).toFloat() * 3.2f).coerceIn(0.04f, 0.92f)
+                    track.write(audio.pcm, pos, end - pos)
+                    pos = end
+                }
+                // Let the last buffer play out.
+                while (isActive && track.playbackHeadPosition < audio.pcm.size && track.playState == android.media.AudioTrack.PLAYSTATE_PLAYING) delay(30L)
+            }
+        } finally {
+            activeTrack = null
+            try { track.pause(); track.flush(); track.stop() } catch (_: Throwable) {}
+            track.release()
+        }
+    }
     private val stopSpeakingHook: () -> Unit = { stopSpeaking() }
 
     /** Cuts her off mid-sentence (the user interrupted). */
     fun stopSpeaking() {
         try { activeTts?.stop() } catch (_: Throwable) {}
+        try { activeTrack?.pause(); activeTrack?.flush() } catch (_: Throwable) {}
         speechJob?.cancel()
         transitionTo(CharacterRuntimeState.Listening)
     }
@@ -266,6 +301,14 @@ class CharacterController(
             var wavRmsEnvelope: FloatArray? = null
 
             try {
+                // Natural AI voice first (accents, dialects); the phone's voice if it isn't available.
+                val natural = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                    com.example.ai.NaturalVoice.synthesize(cleanText, locale.toLanguageTag(), character)
+                }
+                if (natural != null) {
+                    playNatural(natural)
+                    return@launch
+                }
                 if (tts != null) {
                     try {
                         com.example.ai.OmnichannelMediaBridge.configureHumanLikeNeuralVoice(tts, character, locale)

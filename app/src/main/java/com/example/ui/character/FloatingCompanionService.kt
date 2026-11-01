@@ -175,7 +175,8 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
         voice.bindCallbacks(
             owner = OWNER,
             onCommandRecognized = { command -> handlePrompt(command) },
-            onExecutePendingAction = { pending -> executeAction(pending) }
+            onExecutePendingAction = { pending -> executeAction(pending) },
+            onAudioCaptured = { wav -> handlePrompt("", wav) }
         )
     }
 
@@ -287,25 +288,30 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
         voice.triggerManualMicSession(hasRecordPermission = true)
     }
 
-    private fun handlePrompt(prompt: String) {
+    /** "Switch to English" etc., handled on the phone. Returns true if it was one. */
+    private fun trySwitchLanguage(text: String): Boolean {
+        val tag = com.example.ai.LanguageSwitch.detect(text) ?: return false
+        val label = com.example.ai.VoiceLanguages.labelForTag(tag) ?: return false
+        // Saved by the app (or here, if the app isn't running), applied at once.
+        getSharedPreferences("mochi_persistent_settings", MODE_PRIVATE).edit().putString("preferredLanguage", label).apply()
+        voice.requestLanguageSwitch(tag)
+        controller.defaultLanguageTag = tag
+        val confirmation = com.example.ai.LanguageSwitch.confirmation(tag)
+        showBubble(confirmation, autoHideMs = 6_000L)
+        controller.speakWithLipSync(applicationContext, ttsEngine, confirmation, activeCharacter, tag)
+        return true
+    }
+
+    /** A typed/recognised prompt, or (with [audio]) a spoken turn the AI hears directly. */
+    private fun handlePrompt(prompt: String, audio: ByteArray? = null) {
         val clean = prompt.trim()
-        if (clean.isEmpty() || isThinking) {
+        if ((clean.isEmpty() && audio == null) || isThinking) {
             voice.clearAwaitingReply()
             return
         }
-        com.example.ai.LanguageSwitch.detect(clean)?.let { tag ->
-            val label = com.example.ai.VoiceLanguages.labelForTag(tag)
-            if (label != null) {
-                // Saved by the app (or here, if the app isn't running), applied at once.
-                getSharedPreferences("mochi_persistent_settings", MODE_PRIVATE).edit().putString("preferredLanguage", label).apply()
-                voice.requestLanguageSwitch(tag)
-                controller.defaultLanguageTag = tag
-                val confirmation = com.example.ai.LanguageSwitch.confirmation(tag)
-                showBubble(confirmation, autoHideMs = 6_000L)
-                controller.speakWithLipSync(applicationContext, ttsEngine, confirmation, activeCharacter, tag)
-                voice.clearAwaitingReply()
-                return
-            }
+        if (audio == null && trySwitchLanguage(clean)) {
+            voice.clearAwaitingReply()
+            return
         }
         serviceScope.launch {
             isThinking = true
@@ -314,7 +320,20 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
             controller.transitionTo(CharacterRuntimeState.Thinking)
             try {
                 val userName = com.example.security.SecureStore(applicationContext).getString("userName")
-                val turn = com.example.ai.LocalCommands.parse(clean, voice.recognitionLanguageTag)
+                val turn = if (audio != null) {
+                    val (heard, aiTurn) = voice.understandAudio(
+                        audio, activeCharacter, userName, emptyList(),
+                        com.example.ai.VoiceLanguages.promptName(voice.recognitionLanguageTag)
+                    )
+                    if (heard.isEmpty() || aiTurn == null) {
+                        controller.transitionTo(CharacterRuntimeState.Idle)
+                        voice.onNothingForMe()
+                        return@launch
+                    }
+                    voice.onUserSaid(heard)
+                    if (trySwitchLanguage(heard)) return@launch
+                    aiTurn
+                } else com.example.ai.LocalCommands.parse(clean, voice.recognitionLanguageTag)
                     ?.also { com.example.ai.VoiceLog.add(com.example.ai.VoiceLog.Kind.AI, "Understood on the phone (no AI used): ${it.actionType.label}") }
                     ?: voice.processNaturalLanguageCommand(
                         clean, activeCharacter, userName,
@@ -345,6 +364,9 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
                     ) { executeAction(it) }
                 }
             } catch (e: com.example.ai.AiUnavailableException) {
+                if (audio != null && com.example.ai.AiDiagnostics.classify(e.cause ?: e) == com.example.ai.AiDiagnostics.Reason.QUOTA) {
+                    voice.usePhoneRecognizerFor(60)
+                }
                 showBubble(e.message ?: "Please try again.")
                 controller.transitionTo(CharacterRuntimeState.Idle)
             } catch (e: Exception) {

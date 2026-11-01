@@ -2,6 +2,17 @@
 
 Every update gets a new version. Check yours in **Settings** (bottom of the screen): `MochiLife <version> (build <code>)`.
 
+## 2.2 (build 13)
+**New listening and speaking design.**
+- **AI listening (new default)**: the phone records your turn with echo cancellation and noise suppression, a voice detector notices when you start and finish (it waits through short thinking pauses), and the recording goes straight to Gemini, which hears it in any language or mix (Arabic dialects, Persian, English) and answers in the same request. Android's speech recogniser is no longer used for this: no single language to get stuck in ("Persian" can't turn into "Russian" any more), no beeps, no cut-offs, no "not understood" loops. Names are written the way you say them. If the AI quota runs out, she switches to the phone's recogniser for an hour automatically. Settings → AI listening.
+- **Natural voice (new default)**: replies are spoken by Gemini's speech model with a real accent for your language (Iraqi/Baghdadi Arabic, Egyptian, Saudi, Emirati, Tehrani Persian…), instead of the robotic phone voice. Short repeated lines are remembered so they play instantly. If it's unavailable or out of quota, the phone voice is used. Settings → Natural voice.
+- Noise or other people's voices in the recording are ignored quietly (no "sorry, could you repeat that?").
+- "No thanks", "nope", "لا شكرا", "نه ممنون" now end the conversation instead of starting another "anything else?" loop.
+- YouTube: she shows you the results and you pick (one result plays straight away).
+- "Open internal storage" / "files" opens your file manager; unknown names no longer open Google Play.
+- The voice log now records every action and its result (e.g. why an alarm didn't set).
+- Removed a bad example from the AI instructions that taught it to spell "علي اوديت" as "Ali Odeh".
+
 ## 2.1 (build 12)
 - **Calling the right person**:
   - "my mother" no longer lists five random people. Words like "ma", "أم" used to match inside other names ("Mahmoud", "Omar"); now only a whole word of the name or a contact nickname counts. Tip: give her contact the nickname "Mom" or "أمي".
