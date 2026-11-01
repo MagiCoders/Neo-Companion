@@ -59,6 +59,14 @@ class AppLauncher(private val context: Context) {
         return if (start(results)) Result.Opened("YouTube") else launchPackage(YOUTUBE, "YouTube")
     }
 
+    /** Plays one video in the YouTube app (it starts playing on its own). */
+    fun playVideo(videoId: String): Result {
+        if (!isInstalled(YOUTUBE)) return openInPlayStore(YOUTUBE, "YouTube")
+        val watch = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=$videoId")).setPackage(YOUTUBE)
+        return if (start(watch) || start(Intent(Intent.ACTION_VIEW, Uri.parse("vnd.youtube:$videoId")))) Result.Opened("YouTube")
+        else Result.Failed("I couldn't open the video.")
+    }
+
     /** An https link opened inside the given app when it is installed (app links), else null. */
     fun openLinkInApp(pkg: String, url: String): Boolean =
         isInstalled(pkg) && start(Intent(Intent.ACTION_VIEW, Uri.parse(url)).setPackage(pkg))

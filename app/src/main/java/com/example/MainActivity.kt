@@ -853,6 +853,30 @@ fun MochiAppHost(
 
             // Permissions an action needed: runtime ones are asked directly; notification access and
             // the WhatsApp helper first show Google Play's prominent disclosure.
+            // "Send Ali a photo": the system photo picker / file picker (no storage permission needed).
+            var pendingMedia by remember { mutableStateOf<com.example.actions.ActionOutcome.NeedsMedia?>(null) }
+            val onPicked: (android.net.Uri?) -> Unit = { uri ->
+                pendingMedia?.let { viewModel.onMediaPicked(context, ttsInstance, it, uri) }
+                pendingMedia = null
+            }
+            val visualPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+                androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia(), onPicked
+            )
+            val filePicker = androidx.activity.compose.rememberLauncherForActivityResult(
+                androidx.activity.result.contract.ActivityResultContracts.OpenDocument(), onPicked
+            )
+            LaunchedEffect(Unit) {
+                viewModel.mediaRequests.collect { request ->
+                    pendingMedia = request
+                    when (request.kind) {
+                        com.example.actions.ActionOutcome.MediaKind.PHOTO ->
+                            visualPicker.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        com.example.actions.ActionOutcome.MediaKind.VIDEO ->
+                            visualPicker.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.VideoOnly))
+                        com.example.actions.ActionOutcome.MediaKind.FILE -> filePicker.launch(arrayOf("*/*"))
+                    }
+                }
+            }
             var accessDisclosure by remember { mutableStateOf<String?>(null) }
             val actionPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
                 androidx.activity.result.contract.ActivityResultContracts.RequestPermission()

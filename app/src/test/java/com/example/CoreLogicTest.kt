@@ -138,6 +138,64 @@ class CoreLogicTest {
     }
 
     @Test
+    fun `everyday commands are understood on the phone without the AI`() {
+        val c = com.example.ai.LocalCommands
+        fun t(s: String, lang: String = "en-US") = c.parse(s, lang)
+        assertEquals(CompanionActionType.SIM_CALL, t("call Ali Odeh")?.actionType)
+        assertEquals("Ali Odeh", t("call Ali Odeh")?.actionRecipient)
+        assertEquals("mom", t("call my mom")?.actionRecipient)
+        assertEquals(CompanionActionType.WHATSAPP_CALL, t("call Sara on WhatsApp")?.actionType)
+        assertEquals(CompanionActionType.WHATSAPP_VIDEO_CALL, t("video call Sara")?.actionType)
+        assertEquals(CompanionActionType.WHATSAPP_CALL, t("اتصل بعلي على الواتساب", "ar-IQ")?.actionType)
+        assertEquals("علي اوديت", t("اتصل ب علي اوديت", "ar-IQ")?.actionRecipient)
+        assertEquals(CompanionActionType.SIM_CALL, t("به مامان زنگ بزن", "fa-IR")?.actionType)
+        val yt = t("play shape of you on youtube")
+        assertEquals(CompanionActionType.YOUTUBE, yt?.actionType)
+        assertEquals("shape of you", yt?.actionPayload)
+        assertEquals("فيروز", t("شغللي فيروز على اليوتيوب", "ar")?.actionPayload)
+        assertEquals("shape of you", t("open youtube and play shape of you on youtube")?.actionPayload)
+        assertEquals(CompanionActionType.OPEN_APP, t("open Spotify")?.actionType)
+        assertEquals("واتساب", t("افتح واتساب", "ar")?.actionPayload)
+        assertEquals(CompanionActionType.READ_MESSAGES, t("read my messages")?.actionType)
+        assertEquals(CompanionActionType.NONE, t("what time is it")?.actionType)
+        assertTrue(t("what time is it")!!.message.startsWith("It's"))
+        // Multi-step or chatty requests go to the AI.
+        assertNull(t("open WhatsApp and call Ali"))
+        assertNull(t("افتح الواتساب واتصل بعلي", "ar"))
+        assertNull(t("how are you today"))
+        assertNull(t("call me when you can, I want to tell you about my day and my plans"))
+    }
+
+    @Test
+    fun `picking from a list understands ordinals in three languages`() {
+        val c = com.example.ai.LocalCommands
+        assertEquals(1, c.parseChoice("the second one", 4))
+        assertEquals(0, c.parseChoice("1", 4))
+        assertEquals(2, c.parseChoice("الثالث", 4))
+        assertEquals(1, c.parseChoice("دومی", 4))
+        assertEquals(3, c.parseChoice("the last one", 4))
+        assertEquals(-1, c.parseChoice("none of them", 4))
+        assertNull(c.parseChoice("fifth", 4))
+        assertNull(c.parseChoice("tell me a joke about cats and dogs", 4))
+    }
+
+    @Test
+    fun `the clearly matching video is played, unclear results are offered as a list`() {
+        val y = com.example.actions.YouTubeSearch
+        val json = """{"items":[
+            {"id":{"videoId":"JGwWNGJdvx8"},"snippet":{"title":"Ed Sheeran - Shape of You (Official Music Video)","channelTitle":"Ed Sheeran"}},
+            {"id":{"videoId":"abc"},"snippet":{"title":"Shape of You &amp; lyrics","channelTitle":"Lyrics"}}]}"""
+        val videos = y.parse(json)
+        assertEquals(2, videos.size)
+        assertEquals("Shape of You & lyrics", videos[1].title)
+        assertEquals("JGwWNGJdvx8", y.pick(videos, "shape of you")?.id)
+        assertNull(y.pick(videos, "that song from the wedding last week"))
+        assertEquals(com.example.actions.ActionOutcome.MediaKind.PHOTO, com.example.actions.ActionOutcome.MediaKind.from("صورة"))
+        assertEquals(com.example.actions.ActionOutcome.MediaKind.VIDEO, com.example.actions.ActionOutcome.MediaKind.from("the video"))
+        assertEquals(com.example.actions.ActionOutcome.MediaKind.FILE, com.example.actions.ActionOutcome.MediaKind.from("the pdf"))
+    }
+
+    @Test
     fun `goodbye ends a conversation in several languages`() {
         val g = com.example.ai.VoiceCommandService.GOODBYE_REGEX
         listOf("ok bye", "that's all thanks", "good night Elsa", "خلاص", "مع السلامة", "خداحافظ").forEach { assertTrue(it, g.containsMatchIn(it)) }

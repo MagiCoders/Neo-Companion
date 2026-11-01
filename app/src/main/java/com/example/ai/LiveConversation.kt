@@ -244,7 +244,7 @@ class LiveConversation(
         parameters = mapOf(
             "actionType" to Schema.enumeration(
                 CompanionActionType.entries.filter { it != CompanionActionType.NONE }.map { it.name },
-                "SIM_CALL, WHATSAPP_CALL, WHATSAPP (send message), WHATSAPP_READ_CHAT (open chat), TELEGRAM, READ_MESSAGES (read new messages aloud), REPLY_MESSAGE (reply to someone who just wrote), WHATSAPP_PLAY_VOICE, YOUTUBE, OPEN_APP (open an app by name), BROWSER_SEARCH, SOCIAL_SEARCH, OPEN_MEDIA, WHATS_PLAYING, NAVIGATE_ROUTE"
+                "SIM_CALL, WHATSAPP_CALL, WHATSAPP (send message), WHATSAPP_READ_CHAT (open chat), TELEGRAM, READ_MESSAGES (read new messages aloud), REPLY_MESSAGE (reply to someone who just wrote), WHATSAPP_PLAY_VOICE, WHATSAPP_VIDEO_CALL, WHATSAPP_SEND_MEDIA, YOUTUBE, OPEN_APP (open an app by name), BROWSER_SEARCH, SOCIAL_SEARCH, OPEN_MEDIA, WHATS_PLAYING, NAVIGATE_ROUTE"
             ),
             "recipient" to Schema.string("Person exactly as the user named them, or the digits they said; platform for SOCIAL_SEARCH. Empty otherwise."),
             "payload" to Schema.string("Message text in the requested language, search query, or app screen (${MochiHashRoutes.ALL.joinToString()}).")

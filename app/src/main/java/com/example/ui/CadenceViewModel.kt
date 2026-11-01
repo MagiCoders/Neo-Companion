@@ -359,6 +359,12 @@ class CadenceViewModel(
         if (outcome is ActionOutcome.NeedsPermission) {
             _permissionRequests.tryEmit(outcome.permission)
         }
+        if (outcome is ActionOutcome.NeedsMedia) {
+            // The system picker takes over: stop listening while the user chooses.
+            voiceCommandService.endConversation("choosing a file")
+            voiceCommandService.stopListening()
+            _mediaRequests.tryEmit(outcome)
+        }
         if (outcome.spoken.isBlank()) return
         _chatHistory.value = _chatHistory.value + CompanionChatTurn(
             id = UUID.randomUUID().toString(),
@@ -473,6 +479,83 @@ class CadenceViewModel(
     }
 
     /** Runtime permissions the UI should ask for (e.g. contacts when the user says "call Mom"). */
+    /** "Send Ali a photo": the activity opens the photo/file picker for these. */
+    private val _mediaRequests = kotlinx.coroutines.flow.MutableSharedFlow<ActionOutcome.NeedsMedia>(extraBufferCapacity = 2)
+    val mediaRequests: kotlinx.coroutines.flow.SharedFlow<ActionOutcome.NeedsMedia> = _mediaRequests
+
+    /** The user picked (or cancelled) the file for a pending "send it to …" request. */
+    fun onMediaPicked(context: Context, tts: TextToSpeech?, request: ActionOutcome.NeedsMedia, picked: android.net.Uri?) {
+        if (picked == null) {
+            reportOutcome(context, tts, ActionOutcome.Failed("Okay, I won't send anything."))
+            return
+        }
+        viewModelScope.launch {
+            val outcome = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                ActionExecutor(context).shareToWhatsApp(request.number, request.name, picked)
+            }
+            reportOutcome(context, tts, outcome)
+        }
+    }
+
+    // --- YouTube: play the actual video, or let the user pick ---
+    private var pendingVideoChoices: List<com.example.actions.YouTubeSearch.Video>? = null
+
+    private fun playYouTube(context: Context, tts: TextToSpeech?, turn: CompanionChatTurn) {
+        val query = turn.actionPayload.trim()
+        if (query.isEmpty()) { executeTurnActionNow(context, tts, turn); return }
+        viewModelScope.launch {
+            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                com.example.actions.YouTubeSearch(context).search(query)
+            }
+            when (result) {
+                is com.example.actions.YouTubeSearch.Result.Unavailable -> {
+                    com.example.ai.VoiceLog.add(com.example.ai.VoiceLog.Kind.ERROR, "YouTube search unavailable (${result.reason}); opening a search instead")
+                    executeTurnActionNow(context, tts, turn)
+                }
+                is com.example.actions.YouTubeSearch.Result.Found -> {
+                    val videos = result.videos
+                    val chosen = com.example.actions.YouTubeSearch.pick(videos, query)
+                    when {
+                        videos.isEmpty() -> reportOutcome(context, tts, ActionOutcome.Failed("I couldn't find \"$query\" on YouTube."))
+                        chosen != null -> playVideo(context, tts, chosen)
+                        else -> askWhichVideo(context, tts, videos.take(4))
+                    }
+                }
+            }
+        }
+    }
+
+    private fun askWhichVideo(context: Context, tts: TextToSpeech?, videos: List<com.example.actions.YouTubeSearch.Video>) {
+        pendingVideoChoices = videos
+        val lang = com.example.ai.VoiceLanguages.tagFor(_settings.value.preferredLanguage).substringBefore('-')
+        val list = videos.mapIndexed { i, v -> "${i + 1}. ${v.title} — ${v.channel}" }.joinToString("\n")
+        val question = when (lang) {
+            "ar" -> "لكيت كذا واحد. أي واحد تريد؟ كول الأول، الثاني، الثالث لو الرابع."
+            "fa" -> "چندتا پیدا کردم. کدوم رو می‌خوای؟ بگو اولی، دومی، سومی یا چهارمی."
+            else -> "I found a few. Which one do you want — the first, second, third or fourth?"
+        }
+        _chatHistory.value = _chatHistory.value + CompanionChatTurn(
+            id = UUID.randomUUID().toString(), senderIsUser = false, message = "$question\n$list", spokenConfirmation = question, isActionReport = true
+        )
+        // Read the titles out loud too, so it works hands-free.
+        val spokenList = videos.mapIndexed { i, v -> "${i + 1}: ${v.title}" }.joinToString(". ")
+        characterController.speakWithLipSync(context, tts, "$question $spokenList", _selectedCharacter.value)
+    }
+
+    private fun playVideo(context: Context, tts: TextToSpeech?, video: com.example.actions.YouTubeSearch.Video) {
+        pendingVideoChoices = null
+        when (val r = com.example.actions.AppLauncher(context).playVideo(video.id)) {
+            is com.example.actions.AppLauncher.Result.Opened -> {
+                voiceCommandService.endConversation("video playing")
+                voiceCommandService.stopListening()
+                reportOutcome(context, tts, ActionOutcome.Done("Playing \"${video.title}\"."))
+            }
+            is com.example.actions.AppLauncher.Result.InPlayStore ->
+                reportOutcome(context, tts, ActionOutcome.Done("YouTube isn't installed on this phone. I've opened it in Google Play — just tap Install.", speak = true))
+            is com.example.actions.AppLauncher.Result.Failed -> reportOutcome(context, tts, ActionOutcome.Failed(r.reason))
+        }
+    }
+
     private val _permissionRequests = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 4)
     val permissionRequests: kotlinx.coroutines.flow.SharedFlow<String> = _permissionRequests
 
@@ -862,6 +945,19 @@ class CadenceViewModel(
             return
         }
 
+        // Answer to "which video?": "the second one" / "الثاني" / "دومی".
+        pendingVideoChoices?.let { choices ->
+            val index = com.example.ai.LocalCommands.parseChoice(clean, choices.size)
+            if (index != null) {
+                _chatHistory.value = _chatHistory.value + CompanionChatTurn(id = UUID.randomUUID().toString(), senderIsUser = true, message = clean)
+                if (index >= 0) playVideo(context, tts, choices[index])
+                else { pendingVideoChoices = null; reportOutcome(context, tts, ActionOutcome.Done("Okay.", speak = true)) }
+                voiceCommandService.clearAwaitingReply()
+                return
+            }
+            pendingVideoChoices = null
+        }
+
         // "Switch to English" / "حول عربي": handled on the phone, instantly and without AI quota.
         com.example.ai.LanguageSwitch.detect(clean)?.let { tag ->
             val label = com.example.ai.VoiceLanguages.labelForTag(tag)
@@ -886,17 +982,25 @@ class CadenceViewModel(
             message = clean
         )
 
+        // Everyday commands ("call Ali", "open YouTube", "play X on YouTube"…) are understood on
+        // the phone: instant, and no AI quota used.
+        val localTurn = com.example.ai.LocalCommands.parse(clean, com.example.ai.VoiceLanguages.tagFor(_settings.value.preferredLanguage))
+
         viewModelScope.launch {
             _isCompanionThinking.value = true
             characterController.transitionTo(CharacterRuntimeState.Thinking)
             // Spoken turns: if the answer takes a moment, say so instead of leaving silence.
-            val fillerJob = if (fromVoice) launch {
+            val fillerJob = if (fromVoice && localTurn == null) launch {
                 kotlinx.coroutines.delay(FILLER_AFTER_MS)
                 characterController.speakWithLipSync(context, tts, thinkingFiller(), activeChar)
             } else null
             try {
                 // The energy check and the AI call run at the same time; the answer is only used
                 // if the check passes. Offline/Firestore hiccups must not block chatting.
+                val aiTurn = if (localTurn != null) {
+                    com.example.ai.VoiceLog.add(com.example.ai.VoiceLog.Kind.AI, "Understood on the phone (no AI used): ${localTurn.actionType.label}")
+                    localTurn
+                } else {
                 val creditCheck = async {
                     uid == null || _userProfile.value.userId != uid ||
                         runCatching { repository.consumeAiCreditOrThrow(uid, _userProfile.value) }.getOrDefault(true)
@@ -918,12 +1022,13 @@ class CadenceViewModel(
                     characterController.transitionTo(CharacterRuntimeState.Idle)
                     return@launch
                 }
-                val aiTurn = aiResult.getOrElse { e ->
+                aiResult.getOrElse { e ->
                     if (e is kotlinx.coroutines.CancellationException) throw e
                     val message = (e as? AiUnavailableException)?.message ?: "Something went wrong."
                     reportOutcome(context, tts, ActionOutcome.Failed(message))
                     characterController.transitionTo(CharacterRuntimeState.Idle)
                     return@launch
+                }
                 }
 
                 _currentStressPercent.value = aiTurn.angerOrStressPercent
@@ -969,8 +1074,9 @@ class CadenceViewModel(
                     // Harmless and instant: no countdown.
                     CompanionActionType.NAVIGATE_ROUTE, CompanionActionType.WHATS_PLAYING,
                     CompanionActionType.READ_MESSAGES, CompanionActionType.OPEN_APP,
-                    CompanionActionType.YOUTUBE ->
+                    CompanionActionType.WHATSAPP_SEND_MEDIA ->
                         executeTurnActionNow(context, tts, aiTurn)
+                    CompanionActionType.YOUTUBE -> playYouTube(context, tts, aiTurn)
                     else -> {
                         val ready = (preparation as Preparation.Ready).action
                         voiceCommandService.scheduleActionWithUndoWindow(
@@ -1168,6 +1274,7 @@ class CadenceViewModel(
         /** Actions after which she stops listening (calls and anything that plays sound). */
         private val ENDS_CONVERSATION = setOf(
             CompanionActionType.SIM_CALL, CompanionActionType.WHATSAPP_CALL, CompanionActionType.SOCIAL_CALL,
+            CompanionActionType.WHATSAPP_VIDEO_CALL,
             CompanionActionType.YOUTUBE, CompanionActionType.OPEN_MEDIA, CompanionActionType.WHATSAPP_PLAY_VOICE
         )
         private val WAKE_GREETINGS = mapOf(

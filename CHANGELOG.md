@@ -2,6 +2,13 @@
 
 Every update gets a new version. Check yours in **Settings** (bottom of the screen): `MochiLife <version> (build <code>)`.
 
+## 2.0 (build 11)
+- **Everyday commands without AI** (instant, no AI quota): "call X", "call X on WhatsApp", "video call X", "play X on YouTube", "open X", "read my messages", "what time is it", in English, Arabic and Persian (e.g. "اتصل بعلي على الواتساب", "شغللي فيروز على اليوتيوب", "به مامان زنگ بزن"). Multi-step requests still go to the AI. The voice log shows "Understood on the phone (no AI used)".
+- **Plays the actual YouTube video**: finds it with YouTube's free search service (not Gemini). If the top result clearly matches, it plays; if not, she reads the top 4 and you answer "the second one" / "الثاني" / "دومی" (or "none"). Needs "YouTube Data API v3" enabled once in Google Cloud. Settings → Diagnostics → Run check tells you if it's working; until then she opens a YouTube search as before.
+- **WhatsApp video calls** ("video call Ali").
+- **Send a photo, video or file on WhatsApp** ("send Ali a photo"): the phone's photo or file picker opens (no storage permission needed), you choose, it goes straight into Ali's chat and the WhatsApp helper presses Send (or you tap Send if the helper is off).
+- **No more nagging after a false wake-up**: if noise wakes her and you never actually say anything, she goes back to sleep quietly. "Anything else?" is only asked after a real exchange.
+
 ## 1.9 (build 10)
 - **Fixed: stuck in Arabic.** After switching to Arabic, "switch to English" was written down in Arabic letters and the AI didn't switch back. Language switching is now recognised on the phone itself (English, Arabic, Persian words and their Arabic-letter spellings, e.g. "سويتش تو انجلش", "حولي فارسي", "احجي عراقي"), switches instantly and doesn't use AI quota. Works from the floating companion too.
 - **Fixed: names said in Arabic not found** ("اتصل بعلي اوديت" when the contact is saved as "Ali Odeh"). The AI now also gives the name's spellings in Latin and Arabic script, and each is tried. If only the first name matches, she asks which one you mean instead of saying "not found".

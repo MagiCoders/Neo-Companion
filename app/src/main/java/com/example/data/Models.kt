@@ -34,7 +34,9 @@ enum class CompanionActionType(
     REPLY_MESSAGE("Reply to a message", "↩️", "Notifications · reply"),
     WHATSAPP_PLAY_VOICE("Play WhatsApp voice note", "🎧", "WhatsApp · voice note"),
     SET_VOICE_LANGUAGE("Change voice language", "🗣️", "MochiLife · language"),
-    OPEN_APP("Open an app", "📱", "Apps · open")
+    OPEN_APP("Open an app", "📱", "Apps · open"),
+    WHATSAPP_VIDEO_CALL("WhatsApp video call", "📹", "WhatsApp · video call"),
+    WHATSAPP_SEND_MEDIA("Send a photo, video or file", "📎", "WhatsApp · attachment")
 }
 
 object MochiHashRoutes {

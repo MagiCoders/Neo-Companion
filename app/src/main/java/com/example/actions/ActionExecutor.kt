@@ -26,6 +26,22 @@ sealed interface ActionOutcome {
     }
     data class NeedsPermission(val permission: String, override val spoken: String) : ActionOutcome
     data class Failed(override val spoken: String) : ActionOutcome
+    /** The user must pick a photo, video or file (system picker) before it is sent to [number]. */
+    data class NeedsMedia(val kind: MediaKind, val number: String, val name: String, override val spoken: String) : ActionOutcome
+
+    enum class MediaKind { PHOTO, VIDEO, FILE;
+        companion object {
+            /** "photo" / "صورة" / "عکس" → PHOTO, "video" / "فيديو" → VIDEO, anything else → FILE. */
+            fun from(payload: String): MediaKind {
+                val p = payload.lowercase()
+                return when {
+                    listOf("photo", "picture", "pic", "image", "selfie", "صورة", "صوره", "صور", "عکس", "تصویر").any { it in p } -> PHOTO
+                    listOf("video", "clip", "فيديو", "ڤيديو", "فیلم", "ویدیو", "ویدئو").any { it in p } -> VIDEO
+                    else -> FILE
+                }
+            }
+        }
+    }
 }
 
 /** An action that has been checked and is ready to run after the countdown. */
@@ -124,6 +140,12 @@ class ActionExecutor(private val context: Context) {
         return when (turn.actionType) {
             CompanionActionType.SIM_CALL -> simCall(action)
             CompanionActionType.WHATSAPP_CALL, CompanionActionType.SOCIAL_CALL -> whatsAppCall(action)
+            CompanionActionType.WHATSAPP_VIDEO_CALL -> whatsAppVideoCall(action)
+            CompanionActionType.WHATSAPP_SEND_MEDIA -> {
+                val number = action.number
+                if (number == null) ActionOutcome.Failed("${who(action)} has no phone number.")
+                else ActionOutcome.NeedsMedia(ActionOutcome.MediaKind.from(turn.actionPayload), number, who(action), "Pick it and I'll send it to ${who(action)}.")
+            }
             CompanionActionType.WHATSAPP -> whatsAppMessage(action)
             CompanionActionType.WHATSAPP_READ_CHAT -> whatsAppOpenChat(action)
             CompanionActionType.WHATSAPP_CONTACTS -> openApp(WHATSAPP, "WhatsApp")
@@ -154,6 +176,69 @@ class ActionExecutor(private val context: Context) {
         val intent = Intent(if (canCallDirectly) Intent.ACTION_CALL else Intent.ACTION_DIAL, Uri.fromParts("tel", number, null))
         return launch(intent, "I couldn't open the phone app.") {
             if (canCallDirectly) "Calling ${who(action)}." else "The dialer is ready for ${who(action)} — tap Call."
+        }
+    }
+
+    private fun whatsAppVideoCall(action: PreparedAction): ActionOutcome {
+        if (!isInstalled(WHATSAPP)) return ActionOutcome.Failed("WhatsApp isn't installed on this phone.")
+        val dataId = action.contact?.whatsAppVideoDataId
+        if (dataId != null) {
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(contacts.dataUri(dataId), ContactResolver.WHATSAPP_VIDEO_CALL_MIME)
+                setPackage(WHATSAPP)
+            }
+            return launch(intent, "WhatsApp didn't accept the video call.") { "Starting a WhatsApp video call with ${who(action)}." }
+        }
+        val number = action.number ?: return ActionOutcome.Failed("${who(action)} has no phone number.")
+        val helper = WhatsAppHelper.isEnabled(context)
+        if (helper) WhatsAppHelper.request(WhatsAppHelper.Task.VideoCall)
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/${PhoneNumbers.forWhatsApp(number)}")).setPackage(WHATSAPP)
+        return launch(intent, "I couldn't open WhatsApp.") {
+            if (helper) "Video calling ${who(action)} on WhatsApp." else "I opened ${who(action)}'s chat — tap the video button."
+        }
+    }
+
+    /**
+     * Sends a file the user just picked into a contact's WhatsApp chat. The file is first copied
+     * into the app's shared cache (FileProvider), so only that one file is ever exposed.
+     */
+    fun shareToWhatsApp(number: String, name: String, picked: Uri): ActionOutcome {
+        val pkg = when {
+            isInstalled(WHATSAPP) -> WHATSAPP
+            isInstalled(WHATSAPP_BUSINESS) -> WHATSAPP_BUSINESS
+            else -> return ActionOutcome.Failed("WhatsApp isn't installed on this phone.")
+        }
+        val resolver = context.contentResolver
+        val mime = resolver.getType(picked) ?: "application/octet-stream"
+        val displayName = resolver.query(picked, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+            ?.replace(Regex("[^\\w.\\- ]"), "_")?.take(80) ?: "attachment"
+        val dir = java.io.File(context.cacheDir, "shared").apply { mkdirs() }
+        val out = java.io.File(dir, displayName)
+        try {
+            resolver.openInputStream(picked)?.use { input ->
+                out.outputStream().use { output ->
+                    val copied = input.copyTo(output)
+                    if (copied > MAX_SHARE_BYTES) { out.delete(); return ActionOutcome.Failed("That file is too big to send from here (over 100 MB).") }
+                }
+            } ?: return ActionOutcome.Failed("I couldn't read that file.")
+        } catch (e: Exception) {
+            out.delete()
+            return ActionOutcome.Failed("I couldn't read that file.")
+        }
+        val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", out)
+        val helper = WhatsAppHelper.isEnabled(context)
+        if (helper) WhatsAppHelper.request(WhatsAppHelper.Task.SendPrefilled)
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = mime
+            putExtra(Intent.EXTRA_STREAM, uri)
+            // Opens straight into this contact's chat instead of WhatsApp's contact chooser.
+            putExtra("jid", PhoneNumbers.forWhatsApp(number) + "@s.whatsapp.net")
+            setPackage(pkg)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        return launch(intent, "I couldn't open WhatsApp.") {
+            if (helper) "Sending it to $name on WhatsApp." else "It's ready in $name's chat — tap Send."
         }
     }
 
@@ -359,8 +444,11 @@ class ActionExecutor(private val context: Context) {
             CompanionActionType.WHATSAPP,
             CompanionActionType.WHATSAPP_READ_CHAT,
             CompanionActionType.TELEGRAM,
-            CompanionActionType.WHATSAPP_PLAY_VOICE
+            CompanionActionType.WHATSAPP_PLAY_VOICE,
+            CompanionActionType.WHATSAPP_VIDEO_CALL,
+            CompanionActionType.WHATSAPP_SEND_MEDIA
         )
+        private const val MAX_SHARE_BYTES = 100L * 1024 * 1024
         /** Actions that need a query. (YOUTUBE doesn't: no query just opens the app.) */
         val QUERY_ACTIONS = setOf(
             CompanionActionType.BROWSER_SEARCH,

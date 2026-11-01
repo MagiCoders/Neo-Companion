@@ -23,7 +23,7 @@ import android.view.accessibility.AccessibilityNodeInfo
  */
 class WhatsAppHelper : AccessibilityService() {
 
-    enum class Task { SendPrefilled, PlayLatestVoiceNote, VoiceCall }
+    enum class Task { SendPrefilled, PlayLatestVoiceNote, VoiceCall, VideoCall }
 
     override fun onServiceConnected() {
         instance = this
@@ -43,9 +43,11 @@ class WhatsAppHelper : AccessibilityService() {
         if (pkg != ActionExecutor.WHATSAPP && pkg != ActionExecutor.WHATSAPP_BUSINESS) return
         val root = rootInActiveWindow ?: return
         val done = when (task) {
-            Task.SendPrefilled -> clickFirst(root, pkg, listOf("send"), listOf("Send"))
+            // "send" in a chat; "send" / "send_button" on the media preview screen.
+            Task.SendPrefilled -> clickFirst(root, pkg, listOf("send", "send_button"), listOf("Send"))
             Task.PlayLatestVoiceNote -> clickLast(root, pkg, listOf("control_btn", "voice_note_btn", "play_button"), listOf("Play", "Play voice message"))
             Task.VoiceCall -> clickFirst(root, pkg, listOf("menuitem_voice_call", "voice_call_btn"), listOf("Voice call", "Audio call"))
+            Task.VideoCall -> clickFirst(root, pkg, listOf("menuitem_video_call", "video_call_btn"), listOf("Video call"))
         }
         if (done) pending = null
     }

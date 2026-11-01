@@ -205,7 +205,11 @@ class CompanionBrain {
             - SIM_CALL: a normal phone call. WHATSAPP_CALL: a WhatsApp voice call.
             - WHATSAPP: send a WhatsApp message (actionPayload = the exact message text, in the language requested).
             - WHATSAPP_READ_CHAT: open someone's WhatsApp chat. TELEGRAM: open someone in Telegram.
-            - YOUTUBE: open YouTube, searching for actionPayload if given ("open YouTube" → empty payload).
+            - YOUTUBE: play or find something on YouTube; actionPayload = what to play ("play Shape of You" → "Shape of You").
+              "open YouTube" alone → empty payload. The app finds and plays the exact video.
+            - WHATSAPP_VIDEO_CALL: WhatsApp video call (actionRecipient = the person).
+            - WHATSAPP_SEND_MEDIA: send someone a photo, video or file on WhatsApp (actionRecipient = the person,
+              actionPayload = "photo", "video" or "file"). The user picks it on the phone.
             - BROWSER_SEARCH / SOCIAL_SEARCH / OPEN_MEDIA: searches and playback (actionPayload = query).
             - OPEN_APP: open any other app by name ("open Spotify", "افتح الكاميرا"); actionPayload = the app's name.
               If it isn't installed the app offers it in Google Play.

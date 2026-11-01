@@ -102,11 +102,21 @@ object AiDiagnostics {
             report(e)
             Step("AI request (${AiModels.CHAT})", false, describe(e))
         }
+        steps += kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            when (val r = com.example.actions.YouTubeSearch(context).search("music", max = 1)) {
+                is com.example.actions.YouTubeSearch.Result.Found -> Step("YouTube search (play exact videos)", true, "working")
+                is com.example.actions.YouTubeSearch.Result.Unavailable -> Step(
+                    "YouTube search (play exact videos)", false,
+                    r.reason + "\nTo fix: Google Cloud Console → this Firebase project → APIs & Services → Library → " +
+                        "\"YouTube Data API v3\" → Enable. If your API key is restricted, also allow that API on the key."
+                )
+            }
+        }
         return steps
     }
 
     @Suppress("DEPRECATION")
-    private fun signingSha1(context: android.content.Context): String = try {
+    fun signingSha1(context: android.content.Context): String = try {
         val pm = context.packageManager
         val certs: List<ByteArray> = if (android.os.Build.VERSION.SDK_INT >= 28) {
             val info = pm.getPackageInfo(context.packageName, android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES)

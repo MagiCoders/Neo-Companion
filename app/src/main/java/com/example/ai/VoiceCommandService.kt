@@ -148,6 +148,8 @@ class VoiceCommandService(
     private val beeps = BeepSilencer(appContext)
     /** In a conversation, how many times in a row she got silence / couldn't understand. */
     private var quietTurns = 0
+    /** Real requests heard in this conversation (0 = maybe a false wake-up from noise). */
+    private var userTurns = 0
 
     enum class Idle { NOT_UNDERSTOOD, ASK_ANYTHING_ELSE, GOODBYE }
 
@@ -384,6 +386,7 @@ class VoiceCommandService(
             if (!conversationActive) VoiceLog.add(VoiceLog.Kind.WAKE, "Conversation started")
             conversationActive = true
             quietTurns = 0
+            userTurns = 0
             _inConversation.value = true
         }
     }
@@ -744,6 +747,7 @@ class VoiceCommandService(
         val callback = onCommandRecognizedCallback ?: return
         VoiceLog.add(VoiceLog.Kind.HEARD, "\"$command\" (${recognitionLanguage})")
         quietTurns = 0
+        userTurns++
         // "Bye" / "that's all": she still answers, then stops listening.
         if (GOODBYE_REGEX.containsMatchIn(command)) endConversation("goodbye")
         // Hold the wake loop until she has answered (or a timeout passes).
@@ -766,6 +770,13 @@ class VoiceCommandService(
         val idle = onConversationIdle
         if (!conversationActive || idle == null) {
             endConversation("no reply")
+            reevaluate(delayMs = WAKE_RESTART_MS)
+            return
+        }
+        if (userTurns == 0) {
+            // Woken but never spoken to (often noise in a busy room): go back to sleep quietly
+            // instead of asking "anything else?".
+            endConversation(if (notUnderstood) "only noise heard" else "nothing said after waking")
             reevaluate(delayMs = WAKE_RESTART_MS)
             return
         }

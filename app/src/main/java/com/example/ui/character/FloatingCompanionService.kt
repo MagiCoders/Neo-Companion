@@ -314,10 +314,12 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
             controller.transitionTo(CharacterRuntimeState.Thinking)
             try {
                 val userName = com.example.security.SecureStore(applicationContext).getString("userName")
-                val turn = voice.processNaturalLanguageCommand(
-                    clean, activeCharacter, userName,
-                    preferredLanguage = com.example.ai.VoiceLanguages.promptName(voice.recognitionLanguageTag)
-                )
+                val turn = com.example.ai.LocalCommands.parse(clean, voice.recognitionLanguageTag)
+                    ?.also { com.example.ai.VoiceLog.add(com.example.ai.VoiceLog.Kind.AI, "Understood on the phone (no AI used): ${it.actionType.label}") }
+                    ?: voice.processNaturalLanguageCommand(
+                        clean, activeCharacter, userName,
+                        preferredLanguage = com.example.ai.VoiceLanguages.promptName(voice.recognitionLanguageTag)
+                    )
                 val prep = when (turn.actionType) {
                     CompanionActionType.NONE, CompanionActionType.SPEAK_LOUD,
                     CompanionActionType.NAVIGATE_ROUTE, CompanionActionType.WHATS_PLAYING -> null
@@ -334,7 +336,7 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
                     CompanionActionType.NONE, CompanionActionType.SPEAK_LOUD -> Unit
                     CompanionActionType.NAVIGATE_ROUTE, CompanionActionType.WHATS_PLAYING,
                     CompanionActionType.READ_MESSAGES, CompanionActionType.OPEN_APP,
-                    CompanionActionType.YOUTUBE -> executeTurn(turn)
+                    CompanionActionType.YOUTUBE, CompanionActionType.WHATSAPP_SEND_MEDIA -> executeTurn(turn)
                     else -> voice.scheduleActionWithUndoWindow(
                         turn,
                         durationSeconds = 3,
@@ -359,6 +361,29 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
     private fun executeAction(pending: PendingVoiceAction) = executeTurn(pending.turn)
 
     private fun executeTurn(turn: com.example.data.CompanionChatTurn) {
+        // From the floating companion there's no list to pick from: play the best match.
+        if (turn.actionType == CompanionActionType.YOUTUBE && turn.actionPayload.isNotBlank()) {
+            serviceScope.launch {
+                val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    com.example.actions.YouTubeSearch(applicationContext).search(turn.actionPayload)
+                }
+                val video = (result as? com.example.actions.YouTubeSearch.Result.Found)?.videos?.let {
+                    com.example.actions.YouTubeSearch.pick(it, turn.actionPayload) ?: it.firstOrNull()
+                }
+                if (video != null && com.example.actions.AppLauncher(applicationContext).playVideo(video.id) is com.example.actions.AppLauncher.Result.Opened) {
+                    voice.endConversation("video playing")
+                    voice.stopListening()
+                    showBubble("Playing \"${video.title}\"", 6_000L)
+                } else {
+                    runTurnAction(turn)
+                }
+            }
+            return
+        }
+        runTurnAction(turn)
+    }
+
+    private fun runTurnAction(turn: com.example.data.CompanionChatTurn) {
         val outcome = OmnichannelMediaBridge.autoExecuteCompanionAction(
             context = applicationContext,
             tts = ttsEngine,
@@ -366,6 +391,13 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
             character = activeCharacter,
             onNavigateHashRoute = { openApp() }
         )
+        if (outcome is com.example.actions.ActionOutcome.NeedsMedia) {
+            // The photo/file picker needs the app on screen.
+            val line = "Open MochiLife and ask me again — I need the app to show you your photos and files."
+            showBubble(line, 8_000L)
+            controller.speakWithLipSync(applicationContext, ttsEngine, line, activeCharacter)
+            return
+        }
         if (outcome.spoken.isNotBlank()) showBubble(outcome.spoken, 6_000L)
     }
 
