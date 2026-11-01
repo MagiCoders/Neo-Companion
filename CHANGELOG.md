@@ -2,6 +2,10 @@
 
 Every update gets a new version. Check yours in **Settings** (bottom of the screen): `MochiLife <version> (build <code>)`.
 
+## 1.3 (build 4)
+- Settings → Diagnostics → **Run check**: tests each link of the AI chain on its own (this app's package and signing SHA-1, sign-in, App Check token, one real AI request) and shows Firebase's exact error for any failing step. **Copy report** copies everything.
+- AI errors are no longer all labelled "App Check": API-key restrictions and other access errors are told apart.
+
 ## 1.2 (build 3)
 - **Mochi faces the front** (app and floating overlay). The model already faced the camera; the old −90° "correction" was what turned it sideways. Checked by rendering the model from all four sides.
 - **Wake word without the beep loop**: "Hey Mochi" is now detected by an offline engine (Vosk, Apache-2.0) that listens quietly. No restarts, no on/off sounds, and no audio leaves the phone. Saying "stop" or "cancel" during a countdown cancels it.

@@ -66,6 +66,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalContext
@@ -2828,11 +2829,13 @@ private fun AppearanceSegmented(mode: Int, accent: Color, onPick: (Int) -> Unit)
 @Composable
 private fun DiagnosticsCard(p: SuitePalette) {
     val context = LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
     val failure by com.example.ai.AiDiagnostics.last.collectAsState()
     val debugSecret = remember { com.example.ai.appCheckDebugSecret(context) }
-    if (failure == null && debugSecret == null) return
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }
+    var running by remember { mutableStateOf(false) }
+    var steps by remember { mutableStateOf<List<com.example.ai.AiDiagnostics.Step>>(emptyList()) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -2845,23 +2848,52 @@ private fun DiagnosticsCard(p: SuitePalette) {
         Text("Diagnostics", style = MochiType.Body.copy(fontWeight = FontWeight.SemiBold), color = p.textPrimary)
         failure?.let { f ->
             Text("Last AI problem: ${com.example.ai.AiDiagnostics.userMessage(f.reason)}", style = MochiType.Label, color = p.textSecondary)
-            Text(f.detail, style = MochiType.Label, color = p.textTertiary)
         }
         if (debugSecret != null) {
             Text(
-                "Test build: before the AI works, add this App Check debug token in Firebase Console → " +
-                    "App Check → Apps → (your Android app) ⋮ → Manage debug tokens → Add debug token.",
+                "Test build App Check debug token (Firebase Console → App Check → Apps → your Android app → ⋮ → Manage debug tokens):",
                 style = MochiType.Label,
                 color = p.textSecondary
             )
             Text(debugSecret, style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold), color = p.textPrimary)
-            Box(
-                Modifier.clip(MochiShapes.pill).background(p.hairline)
-                    .clickable { clipboard.setText(androidx.compose.ui.text.AnnotatedString(debugSecret)); copied = true }
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-            ) {
-                Text(if (copied) "Copied" else "Copy token", style = MochiType.Label, color = p.textPrimary)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            DiagnosticsButton(if (running) "Checking…" else "Run check", p) {
+                if (!running) {
+                    running = true
+                    scope.launch {
+                        steps = com.example.ai.AiDiagnostics.runSelfTest(context)
+                        running = false
+                    }
+                }
+            }
+            if (debugSecret != null) {
+                DiagnosticsButton("Copy token", p) { clipboard.setText(androidx.compose.ui.text.AnnotatedString(debugSecret)) }
+            }
+            if (steps.isNotEmpty()) {
+                DiagnosticsButton(if (copied) "Copied" else "Copy report", p) {
+                    val report = steps.joinToString("\n\n") { (if (it.ok) "✓ " else "✗ ") + it.name + "\n" + it.detail }
+                    clipboard.setText(androidx.compose.ui.text.AnnotatedString(report + (debugSecret?.let { "\n\nDebug token: $it" } ?: "")))
+                    copied = true
+                }
             }
         }
+        steps.forEach { step ->
+            Text(
+                (if (step.ok) "✓ " else "✗ ") + step.name,
+                style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold),
+                color = if (step.ok) p.textPrimary else MochiTokens.danger
+            )
+            Text(step.detail, style = MochiType.Label, color = p.textTertiary)
+        }
+    }
+}
+
+@Composable
+private fun DiagnosticsButton(label: String, p: SuitePalette, onClick: () -> Unit) {
+    Box(
+        Modifier.clip(MochiShapes.pill).background(p.hairline).clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 8.dp)
+    ) {
+        Text(label, style = MochiType.Label, color = p.textPrimary)
     }
 }

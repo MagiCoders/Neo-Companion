@@ -62,9 +62,12 @@ class CoreLogicTest {
         assertEquals(com.example.ai.AiDiagnostics.Reason.NETWORK, d.classify(java.io.IOException("x", java.net.UnknownHostException("host"))))
         assertEquals(com.example.ai.AiDiagnostics.Reason.QUOTA, d.classify(RuntimeException("429 RESOURCE_EXHAUSTED")))
         assertEquals(com.example.ai.AiDiagnostics.Reason.API_DISABLED, d.classify(RuntimeException("SERVICE_DISABLED firebasevertexai")))
+        assertEquals(com.example.ai.AiDiagnostics.Reason.API_KEY_BLOCKED,
+            d.classify(RuntimeException("403 Requests from this Android client application com.x are blocked.")))
         val msg = d.report(RuntimeException("PERMISSION_DENIED"))
-        assertTrue(msg.contains("App Check"))
-        assertEquals(com.example.ai.AiDiagnostics.Reason.APP_CHECK, d.last.value?.reason)
+        assertTrue(msg.contains("Run check"))
+        assertEquals(com.example.ai.AiDiagnostics.Reason.ACCESS_DENIED, d.last.value?.reason)
+        assertTrue(d.last.value!!.detail.contains("PERMISSION_DENIED"))
     }
 
     // ---- Messages bridge ----------------------------------------------------------------------
