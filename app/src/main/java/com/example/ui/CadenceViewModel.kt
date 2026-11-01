@@ -150,6 +150,11 @@ class CadenceViewModel(
         )
     }
 
+    private fun switchVoiceLanguage(label: String) {
+        updateSettings { it.copy(preferredLanguage = label) }
+        com.example.ai.VoiceLog.add(com.example.ai.VoiceLog.Kind.AI, "Voice language → $label")
+    }
+
     /** Voice language for recognition + speech, and the wake phrase. */
     private fun applyVoiceSettings(s: MochiPersistentSettings) {
         val tag = com.example.ai.VoiceLanguages.tagFor(s.preferredLanguage)
@@ -421,6 +426,11 @@ class CadenceViewModel(
 
     init {
         applyVoiceSettings(_settings.value)
+        viewModelScope.launch {
+            voiceCommandService.languageRequests.collect { tag ->
+                com.example.ai.VoiceLanguages.labelForTag(tag)?.let(::switchVoiceLanguage)
+            }
+        }
         voiceCommandService.onConversationIdle = { idle ->
             val tts = speechEngine
             if (tts != null) characterController.speakWithLipSync(appContext, tts, idleLine(idle), _selectedCharacter.value)
@@ -852,6 +862,21 @@ class CadenceViewModel(
             return
         }
 
+        // "Switch to English" / "حول عربي": handled on the phone, instantly and without AI quota.
+        com.example.ai.LanguageSwitch.detect(clean)?.let { tag ->
+            val label = com.example.ai.VoiceLanguages.labelForTag(tag)
+            if (label != null) {
+                switchVoiceLanguage(label)
+                val confirmation = com.example.ai.LanguageSwitch.confirmation(tag)
+                _chatHistory.value = _chatHistory.value +
+                    CompanionChatTurn(id = UUID.randomUUID().toString(), senderIsUser = true, message = clean) +
+                    CompanionChatTurn(id = UUID.randomUUID().toString(), senderIsUser = false, message = confirmation, isActionReport = true)
+                characterController.speakWithLipSync(context, tts, confirmation, _selectedCharacter.value, tag)
+                voiceCommandService.clearAwaitingReply()
+                return
+            }
+        }
+
         val uid = _currentUserId.value
         val activeChar = _selectedCharacter.value
         val history = _chatHistory.value
@@ -882,7 +907,7 @@ class CadenceViewModel(
                         companion = activeChar,
                         userName = _settings.value.userName,
                         history = history.filterNot { it.isActionReport },
-                        preferredLanguage = com.example.ai.VoiceLanguages.englishName(
+                        preferredLanguage = com.example.ai.VoiceLanguages.promptName(
                             com.example.ai.VoiceLanguages.tagFor(_settings.value.preferredLanguage)
                         )
                     )
@@ -932,9 +957,8 @@ class CadenceViewModel(
                 var replyLanguage = aiTurn.detectedLanguage
                 if (aiTurn.actionType == CompanionActionType.SET_VOICE_LANGUAGE) {
                     com.example.ai.VoiceLanguages.labelForTag(aiTurn.actionPayload)?.let { label ->
-                        updateSettings { it.copy(preferredLanguage = label) }
+                        switchVoiceLanguage(label)
                         replyLanguage = aiTurn.actionPayload
-                        com.example.ai.VoiceLog.add(com.example.ai.VoiceLog.Kind.AI, "Voice language → $label")
                     }
                 }
                 characterController.speakWithLipSync(context, tts, aiTurn.message, activeChar, replyLanguage)

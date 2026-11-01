@@ -53,6 +53,12 @@ class CompanionBrain {
                 "For calls/messages: the person EXACTLY as the user named them (e.g. 'Mom', 'Neo Smith', 'أمي') or the digits they said. " +
                     "For SOCIAL_SEARCH: the platform. Otherwise empty. Never invent a name or number."
             ),
+            "recipientSpellings" to Schema.array(
+                Schema.string(),
+                "For calls/messages to a named person: up to 4 other ways the name may be saved in a phone's contacts, " +
+                    "in BOTH Latin letters and Arabic/Persian script (e.g. 'علي اوديت' → ['Ali Odeh', 'Ali Oudeh', 'Ali Audit', 'علي عودة']). " +
+                    "Never translate a name's meaning; only spell it. Empty when there is no person."
+            ),
             "actionPayload" to Schema.string(
                 "For WHATSAPP/TELEGRAM: the exact message to send, written in the language the user asked for. " +
                     "For searches/media: the query. For NAVIGATE_ROUTE: one of the routes listed. Otherwise empty."
@@ -100,7 +106,9 @@ class CompanionBrain {
             appendLine("Companion: ${companion.displayName} — personality: ${companion.voiceStyle}.")
             if (userName.isNotBlank()) appendLine("The user's name: ${PromptSafety.quote(userName)}.")
             if (preferredLanguage.isNotBlank()) {
-                appendLine("The user's chosen language: $preferredLanguage. Reply in the language of the message; " +
+                appendLine("The user's chosen language: $preferredLanguage. When you reply in it, use that country's natural " +
+                    "everyday dialect (e.g. Iraqi Arabic for Arabic (Iraq)), not formal Modern Standard Arabic. " +
+                    "Reply in the language of the message; " +
                     "if the message is unclear, garbled or looks like background noise, do NOT guess an action: " +
                     "reply in $preferredLanguage asking them to say it again, with actionType NONE.")
             }
@@ -168,6 +176,9 @@ class CompanionBrain {
             angerOrStressPercent = json.optInt("stressPercent", 0).coerceIn(0, 100),
             actionType = if (type == CompanionActionType.NAVIGATE_ROUTE && payload.isEmpty()) CompanionActionType.NONE else type,
             actionRecipient = json.optString("actionRecipient").trim().take(80),
+            actionRecipientAlternates = json.optJSONArray("recipientSpellings")?.let { arr ->
+                (0 until arr.length()).map { arr.optString(it).trim() }.filter { it.isNotEmpty() && it.length <= 80 }.distinct().take(4)
+            }.orEmpty(),
             actionPayload = payload.take(2_000),
             suggestedQuestCategory = QuestCategory.DAY
         )

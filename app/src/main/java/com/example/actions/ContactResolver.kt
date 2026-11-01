@@ -43,24 +43,42 @@ class ContactResolver(private val context: Context) {
         ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) ==
             PackageManager.PERMISSION_GRANTED
 
-    fun resolve(spoken: String): ContactLookup {
+    /**
+     * @param alternates other spellings of the same name ("Ali Odeh" for "علي اوديت"), tried too,
+     * so a name said in Arabic finds a contact saved in English and the other way round.
+     */
+    fun resolve(spoken: String, alternates: List<String> = emptyList()): ContactLookup {
         val query = spoken.trim()
         if (query.isEmpty()) return ContactLookup.NotFound(query)
         PhoneNumbers.extract(query)?.let { return ContactLookup.RawNumber(it) }
         if (!hasPermission()) return ContactLookup.NoPermission
 
-        val terms = (listOf(query) + RelationshipAliases.expand(query)).distinct()
-        val all = loadContactsMatching(terms)
-        if (all.isEmpty()) return ContactLookup.NotFound(query)
+        val spellings = (listOf(query) + alternates.map { it.trim() }.filter { it.isNotEmpty() }).distinct()
+        val terms = spellings.flatMap { listOf(it) + RelationshipAliases.expand(it) }.distinct()
+        var all = loadContactsMatching(terms)
+        if (all.isEmpty()) {
+            // No full-name match: try first names ("Ali"), closest spelling first; several → the
+            // user picks, which is better than "not found" for a name heard slightly wrong.
+            val firstNames = spellings.mapNotNull { it.split(Regex("\\s+")).firstOrNull()?.takeIf { f -> f.length >= 2 } }.distinct()
+            all = loadContactsMatching(firstNames).sortedBy { c ->
+                spellings.minOf { com.example.ai.WakeVocabulary.levenshtein(normalize(c.displayName), normalize(it)) }
+            }
+            if (all.isEmpty()) return ContactLookup.NotFound(query)
+            val ranked = all.filter { it.phones.isNotEmpty() }
+            return when (ranked.size) {
+                0 -> ContactLookup.NotFound(query)
+                1 -> ContactLookup.Found(ranked.first())
+                else -> ContactLookup.Ambiguous(query, ranked.take(5))
+            }
+        }
 
-        val q = normalize(query)
         val aliasNorms = terms.map(::normalize).toSet()
         val exact = all.filter { normalize(it.displayName) in aliasNorms }
         val ranked = when {
             exact.isNotEmpty() -> exact
             else -> {
                 val starts = all.filter { c -> aliasNorms.any { normalize(c.displayName).startsWith(it) } }
-                starts.ifEmpty { all.filter { c -> normalize(c.displayName).contains(q) }.ifEmpty { all } }
+                starts.ifEmpty { all.filter { c -> aliasNorms.any { normalize(c.displayName).contains(it) } }.ifEmpty { all } }
             }
         }.filter { it.phones.isNotEmpty() }
 

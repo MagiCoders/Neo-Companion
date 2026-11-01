@@ -56,7 +56,10 @@ object VoiceLanguages {
             ?.label
     }
 
-    /** English name of the language, for the AI prompt ("Persian", "Arabic", …). */
+    /** Language and country in English for the AI prompt ("Arabic (Iraq)", "Persian (Iran)"). */
+    fun promptName(tag: String): String = Locale.forLanguageTag(tag).getDisplayName(Locale.ENGLISH).ifBlank { "English" }
+
+    /** English name of the language ("Persian", "Arabic", …). */
     fun englishName(tag: String): String = Locale.forLanguageTag(tag).getDisplayLanguage(Locale.ENGLISH).ifBlank { "English" }
 }
 

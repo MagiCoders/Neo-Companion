@@ -293,6 +293,20 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
             voice.clearAwaitingReply()
             return
         }
+        com.example.ai.LanguageSwitch.detect(clean)?.let { tag ->
+            val label = com.example.ai.VoiceLanguages.labelForTag(tag)
+            if (label != null) {
+                // Saved by the app (or here, if the app isn't running), applied at once.
+                getSharedPreferences("mochi_persistent_settings", MODE_PRIVATE).edit().putString("preferredLanguage", label).apply()
+                voice.requestLanguageSwitch(tag)
+                controller.defaultLanguageTag = tag
+                val confirmation = com.example.ai.LanguageSwitch.confirmation(tag)
+                showBubble(confirmation, autoHideMs = 6_000L)
+                controller.speakWithLipSync(applicationContext, ttsEngine, confirmation, activeCharacter, tag)
+                voice.clearAwaitingReply()
+                return
+            }
+        }
         serviceScope.launch {
             isThinking = true
             bubbleHideJob?.cancel()
@@ -302,7 +316,7 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
                 val userName = com.example.security.SecureStore(applicationContext).getString("userName")
                 val turn = voice.processNaturalLanguageCommand(
                     clean, activeCharacter, userName,
-                    preferredLanguage = com.example.ai.VoiceLanguages.englishName(voice.recognitionLanguageTag)
+                    preferredLanguage = com.example.ai.VoiceLanguages.promptName(voice.recognitionLanguageTag)
                 )
                 val prep = when (turn.actionType) {
                     CompanionActionType.NONE, CompanionActionType.SPEAK_LOUD,

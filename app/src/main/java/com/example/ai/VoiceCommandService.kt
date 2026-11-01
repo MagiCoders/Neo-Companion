@@ -151,6 +151,15 @@ class VoiceCommandService(
 
     enum class Idle { NOT_UNDERSTOOD, ASK_ANYTHING_ELSE, GOODBYE }
 
+    /** Language switches asked for from the floating companion, for the app to save. */
+    private val _languageRequests = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 2)
+    val languageRequests: kotlinx.coroutines.flow.SharedFlow<String> = _languageRequests
+
+    fun requestLanguageSwitch(tag: String) {
+        setRecognitionLanguage(tag)
+        _languageRequests.tryEmit(tag)
+    }
+
     // ---- Another app using the microphone (a call, a voice note, a recorder) ----
     private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
     private var otherAppUsingMic = false

@@ -2,6 +2,11 @@
 
 Every update gets a new version. Check yours in **Settings** (bottom of the screen): `MochiLife <version> (build <code>)`.
 
+## 1.9 (build 10)
+- **Fixed: stuck in Arabic.** After switching to Arabic, "switch to English" was written down in Arabic letters and the AI didn't switch back. Language switching is now recognised on the phone itself (English, Arabic, Persian words and their Arabic-letter spellings, e.g. "سويتش تو انجلش", "حولي فارسي", "احجي عراقي"), switches instantly and doesn't use AI quota. Works from the floating companion too.
+- **Fixed: names said in Arabic not found** ("اتصل بعلي اوديت" when the contact is saved as "Ali Odeh"). The AI now also gives the name's spellings in Latin and Arabic script, and each is tried. If only the first name matches, she asks which one you mean instead of saying "not found".
+- **Dialect**: replies in Arabic (Iraq) and other regional settings are written in that country's everyday dialect instead of formal Arabic.
+
 ## 1.8 (build 9)
 - **No beeps**: the microphone's open/close beep is hidden by muting the sound for a split second (Settings → Silent listening, on by default). Anything left muted by a crash is restored the next time the app starts.
 - **Steps aside for other apps**: while a call is in progress or another app is recording (WhatsApp voice note, recorder, another assistant), she stops listening and ends the conversation; when the mic is free again, wake listening resumes.

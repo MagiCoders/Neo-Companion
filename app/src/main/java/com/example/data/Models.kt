@@ -169,6 +169,8 @@ data class CompanionChatTurn(
     val spokenConfirmation: String = "",
     val actionType: CompanionActionType = CompanionActionType.NONE,
     val actionRecipient: String = "",
+    /** Other spellings of the recipient's name (Latin and Arabic/Persian script) for contact lookup. */
+    val actionRecipientAlternates: List<String> = emptyList(),
     val actionPayload: String = "",
     val suggestedQuestTitle: String? = null,
     val suggestedQuestCategory: QuestCategory = QuestCategory.DAY,

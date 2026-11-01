@@ -103,7 +103,7 @@ class ActionExecutor(private val context: Context) {
         if (turn.actionRecipient.isBlank()) {
             return Preparation.Blocked(ActionOutcome.Failed("Who should I contact?"))
         }
-        return when (val found = contacts.resolve(turn.actionRecipient)) {
+        return when (val found = contacts.resolve(turn.actionRecipient, turn.actionRecipientAlternates)) {
             is ContactLookup.Found -> Preparation.Ready(PreparedAction(turn, found.contact, found.contact.primaryPhone))
             is ContactLookup.RawNumber -> Preparation.Ready(PreparedAction(turn, number = found.number))
             is ContactLookup.Ambiguous -> Preparation.Blocked(ActionOutcome.NeedsContactChoice(found.query, found.candidates))

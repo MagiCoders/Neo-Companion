@@ -118,6 +118,26 @@ class CoreLogicTest {
     }
 
     @Test
+    fun `switching language works from any language, even when written in Arabic letters`() {
+        val d = com.example.ai.LanguageSwitch
+        assertEquals("en-US", d.detect("switch to English"))
+        assertEquals("en-US", d.detect("سويتش تو انجلش"))          // English said while listening in Arabic
+        assertEquals("en-US", d.detect("حول انكليزي"))
+        assertEquals("ja-JP", d.detect("switch to Japanese"))
+        assertEquals("fa-IR", d.detect("فارسی صحبت کن"))
+        assertEquals("fa-IR", d.detect("حولي فارسي"))
+        assertEquals("ar", d.detect("talk to me in Arabic"))
+        assertEquals("ar-IQ", d.detect("احجي عراقي"))
+        assertEquals("ar-IQ", d.detect("speak Iraqi Arabic"))
+        assertNull(d.detect("translate hello to Japanese"))
+        assertNull(d.detect("call my mom and talk in English"))
+        assertNull(d.detect("how are you"))
+        assertNull(d.detect("I love English music"))
+        assertTrue(d.confirmation("ar-IQ").isNotBlank())
+        assertEquals("Arabic (Iraq)", com.example.ai.VoiceLanguages.promptName("ar-IQ"))
+    }
+
+    @Test
     fun `goodbye ends a conversation in several languages`() {
         val g = com.example.ai.VoiceCommandService.GOODBYE_REGEX
         listOf("ok bye", "that's all thanks", "good night Elsa", "خلاص", "مع السلامة", "خداحافظ").forEach { assertTrue(it, g.containsMatchIn(it)) }
