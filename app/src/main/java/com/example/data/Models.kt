@@ -33,7 +33,8 @@ enum class CompanionActionType(
     READ_MESSAGES("Read my messages", "📥", "Notifications · read aloud"),
     REPLY_MESSAGE("Reply to a message", "↩️", "Notifications · reply"),
     WHATSAPP_PLAY_VOICE("Play WhatsApp voice note", "🎧", "WhatsApp · voice note"),
-    SET_VOICE_LANGUAGE("Change voice language", "🗣️", "MochiLife · language")
+    SET_VOICE_LANGUAGE("Change voice language", "🗣️", "MochiLife · language"),
+    OPEN_APP("Open an app", "📱", "Apps · open")
 }
 
 object MochiHashRoutes {
@@ -71,6 +72,8 @@ data class MochiPersistentSettings(
     val wakePhrase: String = "hey mochi",
     /** Open-mic Gemini Live conversation instead of turn-by-turn voice. Best with headphones. */
     val liveVoiceChat: Boolean = false,
+    /** Hide the beep Android plays when the microphone opens and closes. */
+    val silentListening: Boolean = true,
     val busyWatchingVideos: Boolean = true,
     val busyPlayingGames: Boolean = true,
     val busyFullScreenApps: Boolean = true,

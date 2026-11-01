@@ -96,6 +96,28 @@ class CoreLogicTest {
     }
 
     @Test
+    fun `apps are recognised by the names people use`() {
+        val a = com.example.actions.AppLauncher
+        assertEquals("com.google.android.youtube", a.findKnown("YouTube")?.pkg)
+        assertEquals("com.google.android.youtube", a.findKnown("the youtube app")?.pkg)
+        assertEquals("com.whatsapp", a.findKnown("واتساب")?.pkg)
+        assertEquals("com.instagram.android", a.findKnown("اینستاگرام")?.pkg)
+        assertEquals("com.twitter.android", a.findKnown("X")?.pkg)
+        assertNull(a.findKnown("my banking app"))
+    }
+
+    @Test
+    fun `opening a missing app sends the user to Google Play instead of a website`() {
+        val launcher = com.example.actions.AppLauncher(context)
+        // Robolectric has no apps installed: YouTube is offered in Google Play (falls back to the web Play page).
+        val r = launcher.youtube("cats")
+        assertTrue(r is com.example.actions.AppLauncher.Result.InPlayStore)
+        val started = org.robolectric.Shadows.shadowOf(context as android.app.Application).nextStartedActivity
+        assertTrue(started.data.toString().contains("play.google.com") || started.data.toString().startsWith("market://"))
+        assertTrue(started.data.toString().contains("com.google.android.youtube"))
+    }
+
+    @Test
     fun `goodbye ends a conversation in several languages`() {
         val g = com.example.ai.VoiceCommandService.GOODBYE_REGEX
         listOf("ok bye", "that's all thanks", "good night Elsa", "خلاص", "مع السلامة", "خداحافظ").forEach { assertTrue(it, g.containsMatchIn(it)) }

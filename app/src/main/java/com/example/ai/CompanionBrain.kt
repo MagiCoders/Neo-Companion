@@ -194,7 +194,10 @@ class CompanionBrain {
             - SIM_CALL: a normal phone call. WHATSAPP_CALL: a WhatsApp voice call.
             - WHATSAPP: send a WhatsApp message (actionPayload = the exact message text, in the language requested).
             - WHATSAPP_READ_CHAT: open someone's WhatsApp chat. TELEGRAM: open someone in Telegram.
-            - YOUTUBE / BROWSER_SEARCH / SOCIAL_SEARCH / OPEN_MEDIA: searches and playback (actionPayload = query).
+            - YOUTUBE: open YouTube, searching for actionPayload if given ("open YouTube" → empty payload).
+            - BROWSER_SEARCH / SOCIAL_SEARCH / OPEN_MEDIA: searches and playback (actionPayload = query).
+            - OPEN_APP: open any other app by name ("open Spotify", "افتح الكاميرا"); actionPayload = the app's name.
+              If it isn't installed the app offers it in Google Play.
             - READ_MESSAGES: read the user's new messages aloud (actionRecipient = a person or app to filter, or empty).
             - REPLY_MESSAGE: reply to someone who just messaged (actionRecipient = that person, actionPayload = the reply).
             - WHATSAPP_PLAY_VOICE: play the latest WhatsApp voice note from someone (actionRecipient = the person).

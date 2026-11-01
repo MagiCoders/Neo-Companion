@@ -2,6 +2,15 @@
 
 Every update gets a new version. Check yours in **Settings** (bottom of the screen): `MochiLife <version> (build <code>)`.
 
+## 1.8 (build 9)
+- **No beeps**: the microphone's open/close beep is hidden by muting the sound for a split second (Settings → Silent listening, on by default). Anything left muted by a crash is restored the next time the app starts.
+- **Steps aside for other apps**: while a call is in progress or another app is recording (WhatsApp voice note, recorder, another assistant), she stops listening and ends the conversation; when the mic is free again, wake listening resumes.
+- **Doesn't just go silent**: if you don't answer, she asks "Is there anything else I can do for you?" (or "Sorry, could you repeat that?" if she couldn't understand), listens once more, and only then says a polite goodbye ("Okay, I'll be right here if you need me.") and goes back to waiting for her wake phrase. In English, Arabic, Persian, French, Spanish, German and Turkish.
+- **Lets you finish**: she waits for a longer pause (1.8 s) before deciding you're done talking.
+- **The conversation continues after most requests**: only calls, YouTube, music and voice notes end it (so she doesn't hear the other app's sound). Sending a message, opening an app or reading messages keeps the conversation going.
+- **Opens real apps**: YouTube searches open in the YouTube app; Instagram/TikTok/X/Facebook/Reddit searches open in their apps when installed. New "open <any app>" by name (also in Arabic/Persian, e.g. "افتح واتساب"). If the app isn't installed she says so and opens its Google Play page. Google Play doesn't let apps install other apps by themselves, so you tap Install.
+- **Fixed**: your spoken words stayed in the text box after a voice turn.
+
 ## 1.7 (build 8)
 - **Fixed: "Conversation ended (no reply)" right after waking.** While she talked, the wake listener held the microphone; when she finished, the speech recogniser started before the mic was really released and Android gave it silence. The wake listener now waits until the mic is free, and no longer marks its recording as "privacy sensitive" (which made Android silence other recorders).
 - **Faster wake-up**: the wake listener decides after a shorter pause.

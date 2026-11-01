@@ -206,6 +206,9 @@ class OfflineWakeWord(context: Context) {
     val isReady: Boolean get() = model != null
     val isListening: Boolean get() = session != null
 
+    /** Audio session of the wake listener's own recording (so it isn't mistaken for another app). */
+    val activeSessionId: Int get() = session?.sessionId ?: -1
+
     /** Whether the last session got the phone's echo canceller / noise suppressor (for Diagnostics). */
     @Volatile var lastAudioEffects: String = "not started"
         private set
@@ -284,6 +287,7 @@ class OfflineWakeWord(context: Context) {
     ) {
         @Volatile var running = true
         private var record: AudioRecord? = null
+        val sessionId: Int get() = record?.audioSessionId ?: -1
         private var recognizer: Recognizer? = null
         private val effects = mutableListOf<android.media.audiofx.AudioEffect>()
         val thread = Thread(::loop, "wake-word")

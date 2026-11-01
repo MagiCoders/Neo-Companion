@@ -2,6 +2,7 @@ package com.example.ai
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -87,6 +88,12 @@ class VoiceCommandService(
         private const val AWAIT_REPLY_TIMEOUT_MS = 20_000L
         /** Pause after she stops talking before a follow-up listen, so the room echo has died down. */
         private const val FOLLOW_UP_DELAY_MS = 600L
+        /** Pause that ends the user's turn (Android's default is shorter and cuts people off). */
+        private const val END_OF_SPEECH_SILENCE_MS = 1_800L
+        /** Quiet turns in a row before she says goodbye and stops listening. */
+        private const val MAX_QUIET_TURNS = 2
+        /** How long the speech recogniser's own recording may linger after it stops. */
+        private const val RECOGNIZER_RELEASE_MS = 1_500L
 
         private fun phraseRegex(words: List<String>): Regex =
             Regex("(?i)^\\W*" + words.joinToString("\\W+") { Regex.escape(it) } + "\\b[,.!?\\s]*")
@@ -137,6 +144,63 @@ class VoiceCommandService(
     private var speechRecognizer: SpeechRecognizer? = null
     /** Quiet offline "Hey Mochi" listener (no SpeechRecognizer restarts, so no beeps). */
     private val wakeEngine = OfflineWakeWord(appContext)
+    /** Hides the recogniser's start/stop beeps (Settings → "Silent listening"). */
+    private val beeps = BeepSilencer(appContext)
+    /** In a conversation, how many times in a row she got silence / couldn't understand. */
+    private var quietTurns = 0
+
+    enum class Idle { NOT_UNDERSTOOD, ASK_ANYTHING_ELSE, GOODBYE }
+
+    // ---- Another app using the microphone (a call, a voice note, a recorder) ----
+    private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+    private var otherAppUsingMic = false
+    private var commandEndedAt = 0L
+    private val recordingCallback = object : android.media.AudioManager.AudioRecordingCallback() {
+        override fun onRecordingConfigChanged(configs: MutableList<android.media.AudioRecordingConfiguration>) {
+            runOnMain { checkOtherRecorders() }
+        }
+    }
+
+    init {
+        try { audioManager.registerAudioRecordingCallback(recordingCallback, mainHandler) } catch (_: Throwable) {}
+        if (Build.VERSION.SDK_INT >= 31) {
+            try { audioManager.addOnModeChangedListener({ mainHandler.post(it) }) { runOnMain { checkOtherRecorders() } } } catch (_: Throwable) {}
+        }
+    }
+
+    /**
+     * Pauses all listening while another app records or a call is going on, and resumes after.
+     * Our own speech recogniser runs in another process, so its recording is ignored while it is
+     * on and for a moment after it stops.
+     */
+    private fun checkOtherRecorders() {
+        if (sessionKind == SessionKind.COMMAND || liveCallActive) return
+        val sinceCommand = System.currentTimeMillis() - commandEndedAt
+        if (sinceCommand < RECOGNIZER_RELEASE_MS) {
+            mainHandler.postDelayed({ checkOtherRecorders() }, RECOGNIZER_RELEASE_MS - sinceCommand + 50L)
+            return
+        }
+        val mine = wakeEngine.activeSessionId
+        val others = try {
+            audioManager.activeRecordingConfigurations.count { it.clientAudioSessionId != mine }
+        } catch (_: Throwable) { 0 }
+        val mode = audioManager.mode
+        val inCall = mode == android.media.AudioManager.MODE_IN_CALL || mode == android.media.AudioManager.MODE_IN_COMMUNICATION
+        val busy = others > 0 || inCall
+        if (busy == otherAppUsingMic) return
+        otherAppUsingMic = busy
+        if (busy) {
+            VoiceLog.add(VoiceLog.Kind.IGNORED, if (inCall) "Paused: a call is in progress" else "Paused: another app is using the microphone")
+            endConversation("another app needs the mic")
+            if (sessionKind != null) cancelSession(destroy = false)
+        } else {
+            VoiceLog.add(VoiceLog.Kind.WAKE, "Microphone free again, listening resumed")
+            reevaluate(delayMs = WAKE_RESTART_MS)
+        }
+    }
+
+    /** She says something when the user goes quiet (the view model speaks it in her voice). */
+    var onConversationIdle: ((Idle) -> Unit)? = null
     private var wakeMatcher = WakePhraseMatcher(WakePhrases.normalise(WakePhrases.DEFAULT)!!)
     private var wakeStripRegex = phraseRegex(wakeMatcher.words)
     /** BCP-47 language the user speaks; recognition runs only in this language. */
@@ -310,6 +374,7 @@ class VoiceCommandService(
         runOnMain {
             if (!conversationActive) VoiceLog.add(VoiceLog.Kind.WAKE, "Conversation started")
             conversationActive = true
+            quietTurns = 0
             _inConversation.value = true
         }
     }
@@ -467,7 +532,7 @@ class VoiceCommandService(
      * also while she is talking, so "Hey Mochi" or "stop" can interrupt her.
      */
     private fun wantsWakeSession(): Boolean =
-        hosts.isNotEmpty() && hasRecordPermission && !liveCallActive && !wakeLoopSuspended &&
+        hosts.isNotEmpty() && hasRecordPermission && !liveCallActive && !wakeLoopSuspended && !otherAppUsingMic &&
             (assistantSpeaking || (_isWakeWordEnabled.value && !awaitingReply))
 
     fun setLiveCallActive(active: Boolean) {
@@ -589,12 +654,16 @@ class VoiceCommandService(
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                 putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
                 putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, appContext.packageName)
+                // Give the user time to think mid-sentence before deciding they've finished.
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, END_OF_SPEECH_SILENCE_MS)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, END_OF_SPEECH_SILENCE_MS)
             }
             sessionKind = SessionKind.COMMAND
             _wakeWordArmed.value = true
             _isActivelyListening.value = true
             _isWakeLoopRunning.value = false
             _livePartialTranscript.value = ""
+            beeps.mute()
             recognizer.startListening(intent)
             VoiceLog.add(VoiceLog.Kind.HEARD, "Mic open, listening for you ($recognitionLanguage)")
         } catch (e: Exception) {
@@ -603,7 +672,14 @@ class VoiceCommandService(
         }
     }
 
+    /** Settings → "Silent listening": hide the recogniser's beeps. */
+    fun setSilentListening(enabled: Boolean) {
+        runOnMain { beeps.enabled = enabled; if (!enabled) beeps.unmute() }
+    }
+
     private fun cancelSession(destroy: Boolean) {
+        beeps.unmute()
+        if (sessionKind == SessionKind.COMMAND) commandEndedAt = System.currentTimeMillis()
         val hadSession = sessionKind != null
         sessionKind = null
         _isActivelyListening.value = false
@@ -624,6 +700,7 @@ class VoiceCommandService(
     }
 
     private fun onSessionEnded() {
+        if (sessionKind == SessionKind.COMMAND) commandEndedAt = System.currentTimeMillis()
         sessionKind = null
         _isActivelyListening.value = false
         _isWakeLoopRunning.value = false
@@ -657,6 +734,7 @@ class VoiceCommandService(
         }
         val callback = onCommandRecognizedCallback ?: return
         VoiceLog.add(VoiceLog.Kind.HEARD, "\"$command\" (${recognitionLanguage})")
+        quietTurns = 0
         // "Bye" / "that's all": she still answers, then stops listening.
         if (GOODBYE_REGEX.containsMatchIn(command)) endConversation("goodbye")
         // Hold the wake loop until she has answered (or a timeout passes).
@@ -670,6 +748,30 @@ class VoiceCommandService(
         callback(command)
     }
 
+    /**
+     * The user said nothing (or nothing understandable) in a conversation. First time: "Sorry?"
+     * or "Anything else?" and listen again. Second time: a polite goodbye, then quiet wake
+     * listening. Outside a conversation: just go back to wake listening.
+     */
+    private fun handleQuietTurn(notUnderstood: Boolean) {
+        val idle = onConversationIdle
+        if (!conversationActive || idle == null) {
+            endConversation("no reply")
+            reevaluate(delayMs = WAKE_RESTART_MS)
+            return
+        }
+        quietTurns++
+        when {
+            quietTurns >= MAX_QUIET_TURNS -> {
+                endConversation("no reply")
+                idle(Idle.GOODBYE)
+                reevaluate(delayMs = WAKE_RESTART_MS)
+            }
+            notUnderstood -> idle(Idle.NOT_UNDERSTOOD)   // conversation stays on: mic reopens after she speaks
+            else -> idle(Idle.ASK_ANYTHING_ELSE)
+        }
+    }
+
     private fun stripWake(text: String): String {
         var t = text.replace(wakeStripRegex, "")
         // Also the sound-alike spellings the recogniser may write ("hi Elsa" for "hi Elza").
@@ -678,7 +780,9 @@ class VoiceCommandService(
     }
 
     private fun createRecognitionListener(): RecognitionListener = object : RecognitionListener {
-        override fun onReadyForSpeech(params: Bundle?) {}
+        override fun onReadyForSpeech(params: Bundle?) {
+            beeps.unmute(afterMs = 350L) // the start beep has played by now
+        }
 
         override fun onBeginningOfSpeech() {}
 
@@ -688,19 +792,21 @@ class VoiceCommandService(
 
         override fun onBufferReceived(buffer: ByteArray?) {}
 
-        override fun onEndOfSpeech() {}
+        override fun onEndOfSpeech() {
+            beeps.mute() // the stop beep follows; unmuted when the result arrives
+        }
 
         override fun onError(error: Int) {
             when (error) {
                 SpeechRecognizer.ERROR_NO_MATCH,
                 SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
-                    // Nothing said: the conversation is over; go back to quiet wake listening.
-                    VoiceLog.add(VoiceLog.Kind.IGNORED, if (error == SpeechRecognizer.ERROR_NO_MATCH) "Speech heard but not understood" else "No speech heard")
+                    beeps.unmute(afterMs = 300L)
+                    val notUnderstood = error == SpeechRecognizer.ERROR_NO_MATCH
+                    VoiceLog.add(VoiceLog.Kind.IGNORED, if (notUnderstood) "Speech heard but not understood" else "No speech heard")
                     onSessionEnded()
-                    endConversation("no reply")
                     hardErrorCount = 0
                     _livePartialTranscript.value = ""
-                    reevaluate(delayMs = WAKE_RESTART_MS)
+                    handleQuietTurn(notUnderstood)
                 }
                 SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> {
                     onSessionEnded()
@@ -731,6 +837,7 @@ class VoiceCommandService(
         }
 
         override fun onResults(results: Bundle?) {
+            beeps.unmute(afterMs = 300L)
             onSessionEnded()
             hardErrorCount = 0
             val rawSpoken = results

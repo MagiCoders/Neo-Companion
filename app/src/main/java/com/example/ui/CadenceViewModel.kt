@@ -135,6 +135,7 @@ class CadenceViewModel(
             wakeWordEnabled = prefs.getBoolean("wakeWordEnabled", false),
             wakePhrase = prefs.getString("wakePhrase", com.example.ai.WakePhrases.DEFAULT) ?: com.example.ai.WakePhrases.DEFAULT,
             liveVoiceChat = prefs.getBoolean("liveVoiceChat", false),
+            silentListening = prefs.getBoolean("silentListening", true),
             busyWatchingVideos = prefs.getBoolean("busyWatchingVideos", true),
             busyPlayingGames = prefs.getBoolean("busyPlayingGames", true),
             busyFullScreenApps = prefs.getBoolean("busyFullScreenApps", true),
@@ -154,6 +155,7 @@ class CadenceViewModel(
         val tag = com.example.ai.VoiceLanguages.tagFor(s.preferredLanguage)
         voiceCommandService.setRecognitionLanguage(tag)
         voiceCommandService.setWakePhrase(s.wakePhrase)
+        voiceCommandService.setSilentListening(s.silentListening)
         characterController.defaultLanguageTag = tag
     }
 
@@ -168,6 +170,7 @@ class CadenceViewModel(
         prefs.edit()
             .putString("wakePhrase", updated.wakePhrase)
             .putBoolean("liveVoiceChat", updated.liveVoiceChat)
+            .putBoolean("silentListening", updated.silentListening)
             .putString("preferredLanguage", updated.preferredLanguage)
             .putBoolean("floatingCompanionEnabled", updated.floatingCompanionEnabled)
             .putBoolean("wakeWordEnabled", updated.wakeWordEnabled)
@@ -334,9 +337,13 @@ class CadenceViewModel(
             onNavigateHashRoute = { route -> navigateHash(route) }
         )
         if (leavesApp && outcome is ActionOutcome.Done) {
-            // A call or another app takes over: stop listening so the mic is free for it.
-            voiceCommandService.endConversation("opened another app")
-            voiceCommandService.stopListening()
+            if (turn.actionType in ENDS_CONVERSATION) {
+                // A call, a video or music takes over: stop listening so the mic is free and she
+                // doesn't hear the other app's sound.
+                voiceCommandService.endConversation("${turn.actionType.label} started")
+                voiceCommandService.stopListening()
+            }
+            // Otherwise the conversation carries on from the floating companion.
             if (_settings.value.floatingCompanionEnabled) FloatingCompanionService.startIfEnabled(context)
         }
         reportOutcome(context, tts, outcome)
@@ -414,6 +421,11 @@ class CadenceViewModel(
 
     init {
         applyVoiceSettings(_settings.value)
+        voiceCommandService.onConversationIdle = { idle ->
+            val tts = speechEngine
+            if (tts != null) characterController.speakWithLipSync(appContext, tts, idleLine(idle), _selectedCharacter.value)
+            else if (idle != VoiceCommandService.Idle.GOODBYE) voiceCommandService.startPersistentListeningLoop(forceImmediateCommandCapture = true)
+        }
         // Wake phrase heard: take one spoken request (or open a live call if the user chose that).
         voiceCommandService.onWakeWordOnly = {
             if (_settings.value.liveVoiceChat) {
@@ -429,6 +441,13 @@ class CadenceViewModel(
         }
     }
 
+    /** What she says when the user goes quiet in a conversation (in their voice language). */
+    private fun idleLine(idle: VoiceCommandService.Idle): String {
+        val tag = com.example.ai.VoiceLanguages.tagFor(_settings.value.preferredLanguage).substringBefore('-')
+        val lines = IDLE_LINES[tag] ?: IDLE_LINES.getValue("en")
+        return lines.getValue(idle).random()
+    }
+
     /** Mic button: one spoken turn by default; a live call when "Live voice chat" is on (or one is running). */
     fun onMicButton(hasRecordPermission: Boolean) {
         if (_settings.value.liveVoiceChat || liveConversation.isActive()) toggleLiveConversation()
@@ -437,6 +456,7 @@ class CadenceViewModel(
 
     override fun onCleared() {
         voiceCommandService.onWakeWordOnly = null
+        voiceCommandService.onConversationIdle = null
         liveConversation.stop()
         voiceCommandService.setLiveCallActive(false)
         super.onCleared()
@@ -922,8 +942,10 @@ class CadenceViewModel(
                 when (aiTurn.actionType) {
                     CompanionActionType.NONE, CompanionActionType.SPEAK_LOUD,
                     CompanionActionType.SET_VOICE_LANGUAGE -> Unit
+                    // Harmless and instant: no countdown.
                     CompanionActionType.NAVIGATE_ROUTE, CompanionActionType.WHATS_PLAYING,
-                    CompanionActionType.READ_MESSAGES ->
+                    CompanionActionType.READ_MESSAGES, CompanionActionType.OPEN_APP,
+                    CompanionActionType.YOUTUBE ->
                         executeTurnActionNow(context, tts, aiTurn)
                     else -> {
                         val ready = (preparation as Preparation.Ready).action
@@ -1082,6 +1104,48 @@ class CadenceViewModel(
     }
 
     companion object {
+        private val IDLE_LINES: Map<String, Map<VoiceCommandService.Idle, List<String>>> = mapOf(
+            "en" to mapOf(
+                VoiceCommandService.Idle.NOT_UNDERSTOOD to listOf("Sorry, I didn't catch that. Could you say it again?", "Sorry, could you repeat that?"),
+                VoiceCommandService.Idle.ASK_ANYTHING_ELSE to listOf("Is there anything else I can do for you?", "Are you still there? Anything else you need?"),
+                VoiceCommandService.Idle.GOODBYE to listOf("Okay, I'll be right here if you need me.", "Alright, just call me when you need me.")
+            ),
+            "ar" to mapOf(
+                VoiceCommandService.Idle.NOT_UNDERSTOOD to listOf("عذراً، ما سمعتك زين. ممكن تعيد؟"),
+                VoiceCommandService.Idle.ASK_ANYTHING_ELSE to listOf("تحتاج شي ثاني؟", "بعدك موجود؟ أكدر أساعدك بشي ثاني؟"),
+                VoiceCommandService.Idle.GOODBYE to listOf("تمام، أنا هنا إذا احتجتني.")
+            ),
+            "fa" to mapOf(
+                VoiceCommandService.Idle.NOT_UNDERSTOOD to listOf("ببخشید، متوجه نشدم. میشه دوباره بگی؟"),
+                VoiceCommandService.Idle.ASK_ANYTHING_ELSE to listOf("کار دیگه‌ای هست که برات انجام بدم؟", "هنوز اینجایی؟ چیز دیگه‌ای لازم داری؟"),
+                VoiceCommandService.Idle.GOODBYE to listOf("باشه، هر وقت لازم داشتی صدام کن.")
+            ),
+            "fr" to mapOf(
+                VoiceCommandService.Idle.NOT_UNDERSTOOD to listOf("Pardon, je n'ai pas compris. Tu peux répéter ?"),
+                VoiceCommandService.Idle.ASK_ANYTHING_ELSE to listOf("Je peux faire autre chose pour toi ?"),
+                VoiceCommandService.Idle.GOODBYE to listOf("D'accord, je suis là si tu as besoin de moi.")
+            ),
+            "es" to mapOf(
+                VoiceCommandService.Idle.NOT_UNDERSTOOD to listOf("Perdona, no te entendí. ¿Puedes repetirlo?"),
+                VoiceCommandService.Idle.ASK_ANYTHING_ELSE to listOf("¿Necesitas algo más?"),
+                VoiceCommandService.Idle.GOODBYE to listOf("Vale, aquí estaré si me necesitas.")
+            ),
+            "de" to mapOf(
+                VoiceCommandService.Idle.NOT_UNDERSTOOD to listOf("Entschuldigung, das habe ich nicht verstanden. Noch einmal bitte?"),
+                VoiceCommandService.Idle.ASK_ANYTHING_ELSE to listOf("Kann ich sonst noch etwas für dich tun?"),
+                VoiceCommandService.Idle.GOODBYE to listOf("Okay, ich bin da, wenn du mich brauchst.")
+            ),
+            "tr" to mapOf(
+                VoiceCommandService.Idle.NOT_UNDERSTOOD to listOf("Pardon, anlayamadım. Tekrar söyler misin?"),
+                VoiceCommandService.Idle.ASK_ANYTHING_ELSE to listOf("Başka bir şey lazım mı?"),
+                VoiceCommandService.Idle.GOODBYE to listOf("Tamam, ihtiyacın olursa buradayım.")
+            )
+        )
+        /** Actions after which she stops listening (calls and anything that plays sound). */
+        private val ENDS_CONVERSATION = setOf(
+            CompanionActionType.SIM_CALL, CompanionActionType.WHATSAPP_CALL, CompanionActionType.SOCIAL_CALL,
+            CompanionActionType.YOUTUBE, CompanionActionType.OPEN_MEDIA, CompanionActionType.WHATSAPP_PLAY_VOICE
+        )
         private val WAKE_GREETINGS = mapOf(
             "en" to listOf("Yes? I'm listening.", "Hi! I'm here.", "Hey! What's up?"),
             "ar" to listOf("نعم؟ أنا أسمعك.", "هلا! تفضل.", "أهلين، شلون أكدر أساعدك؟"),

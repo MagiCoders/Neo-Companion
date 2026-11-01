@@ -318,7 +318,9 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
                 controller.speakWithLipSync(applicationContext, ttsEngine, turn.message, activeCharacter, turn.detectedLanguage)
                 when (turn.actionType) {
                     CompanionActionType.NONE, CompanionActionType.SPEAK_LOUD -> Unit
-                    CompanionActionType.NAVIGATE_ROUTE, CompanionActionType.WHATS_PLAYING -> executeTurn(turn)
+                    CompanionActionType.NAVIGATE_ROUTE, CompanionActionType.WHATS_PLAYING,
+                    CompanionActionType.READ_MESSAGES, CompanionActionType.OPEN_APP,
+                    CompanionActionType.YOUTUBE -> executeTurn(turn)
                     else -> voice.scheduleActionWithUndoWindow(
                         turn,
                         durationSeconds = 3,

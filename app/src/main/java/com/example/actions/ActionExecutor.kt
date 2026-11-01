@@ -129,6 +129,7 @@ class ActionExecutor(private val context: Context) {
             CompanionActionType.WHATSAPP_CONTACTS -> openApp(WHATSAPP, "WhatsApp")
             CompanionActionType.TELEGRAM -> telegram(action)
             CompanionActionType.YOUTUBE -> youtube(turn.actionPayload)
+            CompanionActionType.OPEN_APP -> openAppByName(turn.actionPayload.ifBlank { turn.actionRecipient })
             CompanionActionType.BROWSER_SEARCH -> webSearch(turn.actionPayload)
             CompanionActionType.SOCIAL_SEARCH -> socialSearch(turn.actionRecipient, turn.actionPayload)
             CompanionActionType.OPEN_MEDIA -> playMedia(turn.actionPayload)
@@ -216,10 +217,22 @@ class ActionExecutor(private val context: Context) {
 
     // --- Search & media --------------------------------------------------------------------------
 
-    private fun youtube(query: String): ActionOutcome {
-        val uri = Uri.parse("https://www.youtube.com/results?search_query=${Uri.encode(query.trim())}")
-        return launch(Intent(Intent.ACTION_VIEW, uri), "I couldn't open YouTube.") { "Here's YouTube for \"${query.trim()}\"." }
+    private val apps by lazy { AppLauncher(context) }
+
+    private fun youtube(query: String): ActionOutcome = when (val r = apps.youtube(query)) {
+        is AppLauncher.Result.Opened -> ActionOutcome.Done(if (query.isBlank()) "Opened YouTube." else "Here's YouTube for \"${query.trim()}\".")
+        is AppLauncher.Result.InPlayStore -> ActionOutcome.Done(notInstalled(r.label), speak = true)
+        is AppLauncher.Result.Failed -> ActionOutcome.Failed(r.reason)
     }
+
+    private fun openAppByName(name: String): ActionOutcome = when (val r = apps.open(name)) {
+        is AppLauncher.Result.Opened -> ActionOutcome.Done("Opened ${r.label}.")
+        is AppLauncher.Result.InPlayStore -> ActionOutcome.Done(notInstalled(r.label), speak = true)
+        is AppLauncher.Result.Failed -> ActionOutcome.Failed(r.reason)
+    }
+
+    private fun notInstalled(label: String) =
+        "$label isn't installed on this phone. I've opened it in Google Play — just tap Install."
 
     private fun webSearch(queryOrUrl: String): ActionOutcome {
         val clean = queryOrUrl.trim()
@@ -246,6 +259,16 @@ class ActionExecutor(private val context: Context) {
             "facebook" in p -> "https://www.facebook.com/search/top?q=$q"
             else -> "https://news.google.com/search?q=$q"
         }
+        // Inside the platform's own app when it is installed; the website otherwise.
+        val pkg = when {
+            "instagram" in p -> "com.instagram.android"
+            "tiktok" in p -> "com.zhiliaoapp.musically"
+            "reddit" in p -> "com.reddit.frontpage"
+            p == "x" || "twitter" in p -> "com.twitter.android"
+            "facebook" in p -> "com.facebook.katana"
+            else -> null
+        }
+        if (pkg != null && apps.openLinkInApp(pkg, url)) return ActionOutcome.Done("Opening results for \"${query.trim()}\".")
         return launch(Intent(Intent.ACTION_VIEW, Uri.parse(url)), "I couldn't open that.") { "Opening results for \"${query.trim()}\"." }
     }
 
@@ -338,8 +361,8 @@ class ActionExecutor(private val context: Context) {
             CompanionActionType.TELEGRAM,
             CompanionActionType.WHATSAPP_PLAY_VOICE
         )
+        /** Actions that need a query. (YOUTUBE doesn't: no query just opens the app.) */
         val QUERY_ACTIONS = setOf(
-            CompanionActionType.YOUTUBE,
             CompanionActionType.BROWSER_SEARCH,
             CompanionActionType.SOCIAL_SEARCH,
             CompanionActionType.OPEN_MEDIA

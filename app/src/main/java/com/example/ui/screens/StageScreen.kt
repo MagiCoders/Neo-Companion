@@ -153,15 +153,22 @@ fun StageScreen(
     var draftText by rememberSaveable { mutableStateOf("") }
     // The mic belongs to the shared VoiceCommandService; this screen only shows its state.
     val isListeningMic = isListening
+    // Words shown live while the user speaks; they belong to the voice turn, not to the text box,
+    // so they are cleared when listening stops (typed text is never touched).
+    var voiceDraft by remember { mutableStateOf("") }
     LaunchedEffect(livePartialTranscript) {
-        if (livePartialTranscript.isNotBlank()) draftText = livePartialTranscript
+        if (livePartialTranscript.isNotBlank() && (draftText.isEmpty() || draftText == voiceDraft)) {
+            draftText = livePartialTranscript
+            voiceDraft = livePartialTranscript
+        }
     }
     LaunchedEffect(isListening) {
         if (isListening) {
             controller.transitionTo(CharacterRuntimeState.Listening)
-        } else if (controller.state.value is CharacterRuntimeState.Listening) {
-            controller.transitionTo(CharacterRuntimeState.Idle)
-            draftText = ""
+        } else {
+            if (draftText == voiceDraft) draftText = ""
+            voiceDraft = ""
+            if (controller.state.value is CharacterRuntimeState.Listening) controller.transitionTo(CharacterRuntimeState.Idle)
         }
     }
     val textPrimary = if (visualStyle.isLight) MochiTokens.lightTextPrimary else MochiTokens.textPrimary

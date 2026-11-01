@@ -785,6 +785,16 @@ fun ProfileAndSettingsScreen(
             )
             HairlineDivider(p.hairline)
             SettingsIconToggleRow(
+                icon = Icons.Outlined.Mic,
+                title = "Silent listening",
+                subtitle = "Hides the beep when the microphone opens and closes",
+                checked = settings.silentListening,
+                accent = accent,
+                palette = p,
+                onCheckedChange = { enabled -> onUpdateSettings { it.copy(silentListening = enabled) } }
+            )
+            HairlineDivider(p.hairline)
+            SettingsIconToggleRow(
                 icon = Icons.Outlined.Language,
                 title = "Live voice chat (beta)",
                 subtitle = "Open conversation instead of one turn at a time. Use headphones, or she may hear herself.",
