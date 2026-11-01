@@ -96,6 +96,13 @@ class CoreLogicTest {
     }
 
     @Test
+    fun `goodbye ends a conversation in several languages`() {
+        val g = com.example.ai.VoiceCommandService.GOODBYE_REGEX
+        listOf("ok bye", "that's all thanks", "good night Elsa", "خلاص", "مع السلامة", "خداحافظ").forEach { assertTrue(it, g.containsMatchIn(it)) }
+        listOf("how are you", "call my wife", "what's the time").forEach { assertFalse(it, g.containsMatchIn(it)) }
+    }
+
+    @Test
     fun `voice language labels map to recognition tags`() {
         val v = com.example.ai.VoiceLanguages
         assertEquals("fa-IR", v.tagFor("فارسی (Persian)"))
@@ -103,6 +110,10 @@ class CoreLogicTest {
         assertEquals("en-US", v.tagFor("English"))
         assertEquals(java.util.Locale.getDefault().toLanguageTag(), v.tagFor(v.PHONE))
         assertEquals("Persian", v.englishName("fa-IR"))
+        assertEquals("العربية – العراق (Iraqi Arabic)", v.labelForTag("ar-IQ"))
+        assertEquals("فارسی (Persian)", v.labelForTag("fa"))
+        assertEquals("ar-IQ", v.tagFor(v.labelForTag("ar-IQ")!!))
+        assertNull(v.labelForTag("xx-YY"))
     }
 
     @Test
@@ -113,6 +124,10 @@ class CoreLogicTest {
         assertTrue(guard.isEcho("calling your mother on whatsapp now"))
         assertFalse(guard.isEcho("call my brother instead"))
         assertFalse(guard.isEcho("yes"))
+        // From a real voice log: the user's question is not an echo of her answer.
+        guard.remember("Yes, I can hear you clearly!")
+        assertFalse(guard.isEcho("can you hear me"))
+        assertTrue(guard.isEcho("I can hear you clearly"))
         assertTrue(guard.saidRecently(listOf("calling", "mother")))
         assertFalse(guard.saidRecently(listOf("stop")))
         now = 60_000L

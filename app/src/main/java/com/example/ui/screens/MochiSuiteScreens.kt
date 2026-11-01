@@ -2863,9 +2863,10 @@ private fun LanguageSheet(current: String, accent: Color, onPick: (String) -> Un
             androidx.compose.foundation.lazy.LazyColumn(Modifier.heightIn(max = 420.dp)) {
                 items(list.size) { i ->
                     val lang = list[i]
-                    val selected = lang.startsWith(current) || current.startsWith(lang.substringBefore(" ("))
+                    // Older versions stored the label without its "(…)" part.
+                    val selected = lang == current || lang.substringBefore(" (") == current
                     Row(
-                        Modifier.fillMaxWidth().clip(MochiShapes.card).clickable { onPick(lang.substringBefore(" (")) }
+                        Modifier.fillMaxWidth().clip(MochiShapes.card).clickable { onPick(lang) }
                             .padding(horizontal = 12.dp, vertical = 14.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {

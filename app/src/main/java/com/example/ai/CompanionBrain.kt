@@ -169,7 +169,11 @@ class CompanionBrain {
             - READ_MESSAGES: read the user's new messages aloud (actionRecipient = a person or app to filter, or empty).
             - REPLY_MESSAGE: reply to someone who just messaged (actionRecipient = that person, actionPayload = the reply).
             - WHATSAPP_PLAY_VOICE: play the latest WhatsApp voice note from someone (actionRecipient = the person).
-            - WHATS_PLAYING: what is playing now. NAVIGATE_ROUTE: open an app screen — one of:
+            - WHATS_PLAYING: what is playing now.
+            - SET_VOICE_LANGUAGE: the user asks you to switch the language you listen and talk in ("switch to Arabic",
+              "talk in Persian", "speak Iraqi"). actionPayload = BCP-47 tag: en-US, ar, ar-IQ (Iraqi), ar-SA, ar-EG, ar-AE,
+              fa-IR, fr-FR, es-ES, de-DE, ja-JP, ko-KR, tr-TR, ru-RU, hi-IN, ur-PK, zh-CN. Write the reply in the NEW language.
+              If they only want one answer in another language, just reply in it with actionType NONE. NAVIGATE_ROUTE: open an app screen — one of:
               ${MochiHashRoutes.ALL.joinToString(", ")}.
             - NONE: just talk.
 

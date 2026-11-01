@@ -323,7 +323,8 @@ class CadenceViewModel(
             CompanionActionType.NAVIGATE_ROUTE,
             CompanionActionType.WHATS_PLAYING,
             CompanionActionType.READ_MESSAGES,
-            CompanionActionType.REPLY_MESSAGE
+            CompanionActionType.REPLY_MESSAGE,
+            CompanionActionType.SET_VOICE_LANGUAGE
         )
         val outcome = OmnichannelMediaBridge.autoExecuteCompanionAction(
             context = context,
@@ -332,8 +333,11 @@ class CadenceViewModel(
             character = _selectedCharacter.value,
             onNavigateHashRoute = { route -> navigateHash(route) }
         )
-        if (leavesApp && outcome is ActionOutcome.Done && _settings.value.floatingCompanionEnabled) {
-            FloatingCompanionService.startIfEnabled(context)
+        if (leavesApp && outcome is ActionOutcome.Done) {
+            // A call or another app takes over: stop listening so the mic is free for it.
+            voiceCommandService.endConversation("opened another app")
+            voiceCommandService.stopListening()
+            if (_settings.value.floatingCompanionEnabled) FloatingCompanionService.startIfEnabled(context)
         }
         reportOutcome(context, tts, outcome)
     }
@@ -415,7 +419,12 @@ class CadenceViewModel(
             if (_settings.value.liveVoiceChat) {
                 if (!liveConversation.isActive()) toggleLiveConversation()
             } else {
-                voiceCommandService.triggerManualMicSession(hasRecordPermission = true)
+                // Answer straight away ("Yes? I'm listening."), then keep the conversation going:
+                // the mic reopens after every reply until the user says bye or goes quiet.
+                voiceCommandService.startConversation()
+                val tts = speechEngine
+                if (tts != null) characterController.speakWithLipSync(appContext, tts, wakeGreeting(), _selectedCharacter.value)
+                else voiceCommandService.triggerManualMicSession(hasRecordPermission = true)
             }
         }
     }
@@ -878,7 +887,8 @@ class CadenceViewModel(
                 // Check the action before announcing it, so she never says "Calling Mom" for a contact that doesn't exist.
                 val preparation = when (aiTurn.actionType) {
                     CompanionActionType.NONE, CompanionActionType.SPEAK_LOUD,
-                    CompanionActionType.NAVIGATE_ROUTE, CompanionActionType.WHATS_PLAYING -> null
+                    CompanionActionType.NAVIGATE_ROUTE, CompanionActionType.WHATS_PLAYING,
+                    CompanionActionType.SET_VOICE_LANGUAGE -> null
                     else -> ActionExecutor(context).prepare(aiTurn)
                 }
                 if (preparation is Preparation.Blocked) {
@@ -897,13 +907,21 @@ class CadenceViewModel(
                 }
 
                 _chatHistory.value = _chatHistory.value + aiTurn
-                if (fromVoice && aiTurn.actionType == CompanionActionType.NONE && aiTurn.message.trimEnd().endsWith("?")) {
-                    voiceCommandService.listenAfterNextReply()
+                // "Switch to Arabic": change the voice language first, so her reply is spoken in it
+                // and the next thing the user says is recognised in it.
+                var replyLanguage = aiTurn.detectedLanguage
+                if (aiTurn.actionType == CompanionActionType.SET_VOICE_LANGUAGE) {
+                    com.example.ai.VoiceLanguages.labelForTag(aiTurn.actionPayload)?.let { label ->
+                        updateSettings { it.copy(preferredLanguage = label) }
+                        replyLanguage = aiTurn.actionPayload
+                        com.example.ai.VoiceLog.add(com.example.ai.VoiceLog.Kind.AI, "Voice language → $label")
+                    }
                 }
-                characterController.speakWithLipSync(context, tts, aiTurn.message, activeChar, aiTurn.detectedLanguage)
+                characterController.speakWithLipSync(context, tts, aiTurn.message, activeChar, replyLanguage)
 
                 when (aiTurn.actionType) {
-                    CompanionActionType.NONE, CompanionActionType.SPEAK_LOUD -> Unit
+                    CompanionActionType.NONE, CompanionActionType.SPEAK_LOUD,
+                    CompanionActionType.SET_VOICE_LANGUAGE -> Unit
                     CompanionActionType.NAVIGATE_ROUTE, CompanionActionType.WHATS_PLAYING,
                     CompanionActionType.READ_MESSAGES ->
                         executeTurnActionNow(context, tts, aiTurn)
@@ -928,6 +946,16 @@ class CadenceViewModel(
                 voiceCommandService.clearAwaitingReply()
             }
         }
+    }
+
+    /** The app's text-to-speech engine, handed over by the activity once it is ready. */
+    @Volatile var speechEngine: TextToSpeech? = null
+
+    /** A short spoken answer to the wake phrase, in the user's voice language. */
+    private fun wakeGreeting(): String {
+        val tag = com.example.ai.VoiceLanguages.tagFor(_settings.value.preferredLanguage).substringBefore('-')
+        val options = WAKE_GREETINGS[tag] ?: WAKE_GREETINGS.getValue("en")
+        return options.random()
     }
 
     /** A short "let me check" in the user's voice language. */
@@ -1054,6 +1082,24 @@ class CadenceViewModel(
     }
 
     companion object {
+        private val WAKE_GREETINGS = mapOf(
+            "en" to listOf("Yes? I'm listening.", "Hi! I'm here.", "Hey! What's up?"),
+            "ar" to listOf("نعم؟ أنا أسمعك.", "هلا! تفضل.", "أهلين، شلون أكدر أساعدك؟"),
+            "fa" to listOf("بله؟ گوش می‌دم.", "سلام! در خدمتم."),
+            "fr" to listOf("Oui ? Je t'écoute."),
+            "es" to listOf("¿Sí? Te escucho."),
+            "de" to listOf("Ja? Ich höre."),
+            "it" to listOf("Sì? Ti ascolto."),
+            "pt" to listOf("Sim? Estou ouvindo."),
+            "tr" to listOf("Efendim? Dinliyorum."),
+            "ru" to listOf("Да? Слушаю."),
+            "ja" to listOf("はい、聞いてますよ。"),
+            "ko" to listOf("네? 듣고 있어요."),
+            "zh" to listOf("在呢，你说。"),
+            "hi" to listOf("हाँ? सुन रही हूँ।"),
+            "ur" to listOf("جی؟ سن رہی ہوں۔"),
+            "id" to listOf("Ya? Aku dengar.")
+        )
         /** Say a filler if the AI hasn't answered a spoken turn after this long. */
         private const val FILLER_AFTER_MS = 1_800L
         private val THINKING_FILLERS = mapOf(

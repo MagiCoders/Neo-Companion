@@ -32,7 +32,8 @@ enum class CompanionActionType(
     SPEAK_LOUD("Speaker broadcast", "🔊", "Speaker · neural voice"),
     READ_MESSAGES("Read my messages", "📥", "Notifications · read aloud"),
     REPLY_MESSAGE("Reply to a message", "↩️", "Notifications · reply"),
-    WHATSAPP_PLAY_VOICE("Play WhatsApp voice note", "🎧", "WhatsApp · voice note")
+    WHATSAPP_PLAY_VOICE("Play WhatsApp voice note", "🎧", "WhatsApp · voice note"),
+    SET_VOICE_LANGUAGE("Change voice language", "🗣️", "MochiLife · language")
 }
 
 object MochiHashRoutes {

@@ -138,6 +138,8 @@ class ActionExecutor(private val context: Context) {
             CompanionActionType.WHATSAPP_PLAY_VOICE -> playWhatsAppVoice(action)
             CompanionActionType.NAVIGATE_ROUTE,
             CompanionActionType.SPEAK_LOUD,
+            // Applied by the view model (it owns the settings).
+            CompanionActionType.SET_VOICE_LANGUAGE,
             CompanionActionType.NONE -> ActionOutcome.Done("")
         }
     }

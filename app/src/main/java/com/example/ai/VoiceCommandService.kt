@@ -68,6 +68,11 @@ class VoiceCommandService(
         private val WAKE_WORD_REGEX = Regex(
             "(?i)\\b(hi|hey|hello|okay|ok)\\s+(mochi|mochie|mochy|elena|kaito|marco)\\b[,.!?\\s]*"
         )
+        /** Ends a conversation (she replies once more, then stops listening). */
+        val GOODBYE_REGEX = Regex(
+            "(?i)\\b(bye|goodbye|good night|that'?s all|that is all|stop listening|go to sleep|see you|thanks,? that'?s it|nothing else)\\b|" +
+                "مع السلامة|باي|تصبح على خير|خلاص|بس كذا|خداحافظ|شب بخیر|بسه|ممنون،? همین"
+        )
         private val ABORT_COMMAND_REGEX = Regex(
             "(?i)^(stop|cancel|undo|abort|wait|don't|do not|never mind|nevermind)[.!]?$"
         )
@@ -137,8 +142,13 @@ class VoiceCommandService(
     private var recognitionLanguage: String = Locale.getDefault().toLanguageTag()
     val recognitionLanguageTag: String get() = recognitionLanguage
     internal val echoGuard = EchoGuard()
-    /** Open the mic once more when the current reply finishes (she asked a question). */
-    private var followUpPending = false
+    /**
+     * Conversation mode: after the wake phrase or a mic tap she keeps listening after every reply,
+     * until the user says goodbye, stays silent, or an action takes them to another app.
+     */
+    private var conversationActive = false
+    private val _inConversation = MutableStateFlow(false)
+    val inConversation: StateFlow<Boolean> = _inConversation.asStateFlow()
 
     /** Called when only the wake phrase was heard ("Hey Mochi") — e.g. to open a live voice call. */
     var onWakeWordOnly: (() -> Unit)? = null
@@ -294,9 +304,23 @@ class VoiceCommandService(
         runOnMain { recognitionLanguage = tag.ifBlank { Locale.getDefault().toLanguageTag() } }
     }
 
-    /** Call when the reply about to be spoken expects an answer: the mic reopens once after it. */
-    fun listenAfterNextReply() {
-        runOnMain { followUpPending = true }
+    /** Starts a back-and-forth conversation (the mic reopens after each of her replies). */
+    fun startConversation() {
+        runOnMain {
+            if (!conversationActive) VoiceLog.add(VoiceLog.Kind.WAKE, "Conversation started")
+            conversationActive = true
+            _inConversation.value = true
+        }
+    }
+
+    /** Ends conversation mode; quiet wake listening (if on) takes over again. */
+    fun endConversation(reason: String) {
+        runOnMain {
+            if (!conversationActive) return@runOnMain
+            conversationActive = false
+            _inConversation.value = false
+            VoiceLog.add(VoiceLog.Kind.WAKE, "Conversation ended ($reason)")
+        }
     }
 
     fun updateRecordPermission(granted: Boolean) {
@@ -342,13 +366,16 @@ class VoiceCommandService(
             this.hasRecordPermission = hasRecordPermission
             if (!hasRecordPermission) return@runOnMain
             if (sessionKind == SessionKind.COMMAND) {
+                // Tapping again while she listens ends the conversation.
                 cancelSession(destroy = false)
+                endConversation("mic tapped")
                 reevaluate(delayMs = WAKE_RESTART_MS)
                 return@runOnMain
             }
             wakeLoopSuspended = false
             hardErrorCount = 0
             awaitingReply = false
+            startConversation()
             startSession(SessionKind.COMMAND)
         }
     }
@@ -390,16 +417,14 @@ class VoiceCommandService(
                 // can interrupt her by saying the wake phrase or "stop".
                 if (sessionKind == SessionKind.COMMAND) cancelSession(destroy = false)
                 reevaluate()
-            } else if (followUpPending && hosts.isNotEmpty() && hasRecordPermission && !liveCallActive) {
-                // She asked something: listen for the answer once, after the speaker has gone quiet.
-                followUpPending = false
+            } else if (conversationActive && hosts.isNotEmpty() && hasRecordPermission && !liveCallActive) {
+                // In a conversation: listen for the next thing the user says, once the speaker is quiet.
                 restartListeningJob?.cancel()
                 restartListeningJob = scope.launch(Dispatchers.Main) {
                     delay(FOLLOW_UP_DELAY_MS)
                     if (!assistantSpeaking && sessionKind != SessionKind.COMMAND) startSession(SessionKind.COMMAND)
                 }
             } else {
-                followUpPending = false
                 // Give the speaker a moment to go quiet before the mic opens again.
                 reevaluate(delayMs = 700L)
             }
@@ -476,7 +501,6 @@ class VoiceCommandService(
     /** She is cut off mid-sentence. */
     private fun bargeIn(reason: String) {
         VoiceLog.add(VoiceLog.Kind.WAKE, reason)
-        followUpPending = false
         assistantSpeaking = false
         activeSpeakers.forEach { stop -> try { stop() } catch (_: Throwable) {} }
     }
@@ -631,6 +655,8 @@ class VoiceCommandService(
         }
         val callback = onCommandRecognizedCallback ?: return
         VoiceLog.add(VoiceLog.Kind.HEARD, "\"$command\" (${recognitionLanguage})")
+        // "Bye" / "that's all": she still answers, then stops listening.
+        if (GOODBYE_REGEX.containsMatchIn(command)) endConversation("goodbye")
         // Hold the wake loop until she has answered (or a timeout passes).
         awaitingReply = true
         awaitReplyJob?.cancel()
@@ -662,8 +688,9 @@ class VoiceCommandService(
             when (error) {
                 SpeechRecognizer.ERROR_NO_MATCH,
                 SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
-                    // Nothing said after the tap / wake phrase: go back to quiet wake listening.
+                    // Nothing said: the conversation is over; go back to quiet wake listening.
                     onSessionEnded()
+                    endConversation("no reply")
                     hardErrorCount = 0
                     _livePartialTranscript.value = ""
                     reevaluate(delayMs = WAKE_RESTART_MS)
@@ -875,12 +902,12 @@ class VoiceCommandService(
  * Main thread only. Pure logic, unit-tested.
  */
 class EchoGuard(private val clock: () -> Long = System::currentTimeMillis) {
-    private val recent = ArrayDeque<Pair<Set<String>, Long>>()
+    private val recent = ArrayDeque<Pair<List<String>, Long>>()
 
     fun remember(spoken: String) {
         val words = tokens(spoken)
         if (words.isEmpty()) return
-        recent.addLast(words.toSet() to clock())
+        recent.addLast(words to clock())
         while (recent.size > 6) recent.removeFirst()
     }
 
@@ -890,13 +917,20 @@ class EchoGuard(private val clock: () -> Long = System::currentTimeMillis) {
         return recent.any { (said, at) -> now - at <= WINDOW_MS && words.all { it.lowercase() in said } }
     }
 
-    /** True when most words of [heard] are words she said in the last [WINDOW_MS]. */
+    /**
+     * True when [heard] repeats a stretch of what she just said, word for word and in order
+     * (one slip allowed in 4+ words). Sharing a few words is not enough: "can you hear me"
+     * is the user's question even right after she said "yes, I can hear you".
+     */
     fun isEcho(heard: String): Boolean {
         val words = tokens(heard)
-        if (words.size < 2) return false
+        if (words.size < 3) return false
+        val allowedSlips = if (words.size >= 4) 1 else 0
         val now = clock()
         return recent.any { (said, at) ->
-            now - at <= WINDOW_MS && words.count { it in said }.toFloat() / words.size >= OVERLAP
+            now - at <= WINDOW_MS && said.size >= words.size && (0..said.size - words.size).any { start ->
+                words.indices.count { words[it] != said[start + it] } <= allowedSlips
+            }
         }
     }
 
@@ -905,6 +939,5 @@ class EchoGuard(private val clock: () -> Long = System::currentTimeMillis) {
 
     private companion object {
         const val WINDOW_MS = 25_000L
-        const val OVERLAP = 0.7f
     }
 }

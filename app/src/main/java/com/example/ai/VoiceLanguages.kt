@@ -16,6 +16,10 @@ object VoiceLanguages {
         Option(PHONE, ""),
         Option("English", "en-US"),
         Option("العربية (Arabic)", "ar"),
+        Option("العربية – العراق (Iraqi Arabic)", "ar-IQ"),
+        Option("العربية – السعودية (Saudi Arabic)", "ar-SA"),
+        Option("العربية – مصر (Egyptian Arabic)", "ar-EG"),
+        Option("العربية – الإمارات (Emirati Arabic)", "ar-AE"),
         Option("فارسی (Persian)", "fa-IR"),
         Option("Français", "fr-FR"),
         Option("Español", "es-ES"),
@@ -43,13 +47,22 @@ object VoiceLanguages {
         return option?.tag?.takeIf { it.isNotEmpty() } ?: Locale.getDefault().toLanguageTag()
     }
 
+    /** Settings label for a BCP-47 tag from the AI ("ar-IQ" → Iraqi Arabic, "fa" → Persian), or null. */
+    fun labelForTag(tag: String): String? {
+        val t = tag.trim().replace('_', '-')
+        if (t.isEmpty()) return null
+        return (ALL.firstOrNull { it.tag.equals(t, ignoreCase = true) }
+            ?: ALL.firstOrNull { it.tag.isNotEmpty() && it.tag.substringBefore('-').equals(t.substringBefore('-'), ignoreCase = true) })
+            ?.label
+    }
+
     /** English name of the language, for the AI prompt ("Persian", "Arabic", …). */
     fun englishName(tag: String): String = Locale.forLanguageTag(tag).getDisplayLanguage(Locale.ENGLISH).ifBlank { "English" }
 }
 
 /**
  * The phrase that wakes the companion. The offline wake engine only knows English words from its
- * vocabulary, so custom phrases are checked against it (see [OfflineWakeWord.unknownWords]).
+ * vocabulary, so custom phrases are resolved against it (see [WakeVocabulary]).
  */
 object WakePhrases {
     const val DEFAULT = "hey mochi"

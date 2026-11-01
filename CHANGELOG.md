@@ -2,6 +2,11 @@
 
 Every update gets a new version. Check yours in **Settings** (bottom of the screen): `MochiLife <version> (build <code>)`.
 
+## 1.6 (build 7)
+- **Real conversations**: say the wake phrase (or tap the mic) and she answers right away ("Yes? I'm listening."), then keeps listening after every reply, so you can talk back and forth without repeating her name. It ends when you say goodbye ("bye", "that's all", "خلاص", "خداحافظ"…), stay quiet after her reply, tap the mic, or an action opens another app (e.g. a WhatsApp call).
+- **Switch language by voice**: "switch to Arabic", "talk in Persian", "speak Iraqi": she changes the voice language (recognition and voice) and answers in it. New Arabic dialect options: Iraqi, Saudi, Egyptian, Emirati.
+- **Echo check fixed**: a question was wrongly dropped as her echo because it shared words with her answer ("can you hear me" after "yes, I can hear you"). Now only a word-for-word repeat of what she said counts as echo.
+
 ## 1.5 (build 6)
 - **Cleaner microphone**: the wake listener records in voice-call mode with the phone's echo canceller and noise suppressor (when the phone has them), so her voice and room noise are reduced before anything is recognised. Diagnostics shows which ones your phone provides.
 - **Interrupt her**: while she talks, say the wake phrase or "stop" (or tap the mic) and she stops at once. Her own voice saying those words is ignored.

@@ -398,6 +398,7 @@ fun MochiAppHost(
 
     // ---- Voice: one shared engine. Bind once; the latest TTS/context are read when a command arrives.
     val latestTts by rememberUpdatedState(ttsInstance)
+    LaunchedEffect(ttsInstance) { viewModel.speechEngine = ttsInstance }
     DisposableEffect(viewModel) {
         viewModel.voiceCommandService.bindCallbacks(
             owner = "app",
