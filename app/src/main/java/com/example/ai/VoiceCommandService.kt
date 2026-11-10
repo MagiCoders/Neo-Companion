@@ -177,6 +177,7 @@ class VoiceCommandService(
     }
 
     init {
+        scope.launch(Dispatchers.Main) { while (true) { delay(1_000L); tickPhase() } }
         try { audioManager.registerAudioRecordingCallback(recordingCallback, mainHandler) } catch (_: Throwable) {}
         if (Build.VERSION.SDK_INT >= 31) {
             try { audioManager.addOnModeChangedListener({ mainHandler.post(it) }) { runOnMain { checkOtherRecorders() } } } catch (_: Throwable) {}
@@ -266,6 +267,40 @@ class VoiceCommandService(
 
     private val _micRmsDb = MutableStateFlow(0f)
     val micRmsDb: StateFlow<Float> = _micRmsDb.asStateFlow()
+
+    // ---- What she is doing right now, and the watchdog that undoes anything stuck ----
+    private val _phase = MutableStateFlow(VoicePhase.OFF)
+    val phase: StateFlow<VoicePhase> = _phase.asStateFlow()
+    private var phaseSince = System.currentTimeMillis()
+    private val watchdog = VoiceWatchdog()
+
+    private fun tickPhase() {
+        val now = System.currentTimeMillis()
+        val p = VoicePhases.derive(
+            VoiceFlags(
+                hasHost = hosts.isNotEmpty(),
+                paused = liveCallActive || otherAppUsingMic,
+                speaking = assistantSpeaking,
+                awaitingReply = awaitingReply,
+                commandSession = sessionKind == SessionKind.COMMAND,
+                wakeSession = sessionKind == SessionKind.WAKE
+            )
+        )
+        if (p != _phase.value) { _phase.value = p; phaseSince = now }
+        val fix = watchdog.check(p, wantsWakeSession(), now - phaseSince)
+        if (fix == Recovery.NONE) return
+        VoiceLog.add(VoiceLog.Kind.ERROR, "Watchdog: stuck in \"${p.label}\" for ${(now - phaseSince) / 1000}s, resetting ($fix)")
+        phaseSince = now
+        CrashReports.nonFatal("Voice watchdog: stuck in ${p.name}, recovery $fix")
+        when (fix) {
+            Recovery.STOP_WAITING -> { awaitReplyJob?.cancel(); awaitingReply = false; reevaluate() }
+            Recovery.STOP_SPEAKING -> { bargeIn("Watchdog: speech ran far too long"); reevaluate() }
+            Recovery.CLOSE_MIC -> { cancelSession(destroy = false); reevaluate() }
+            Recovery.RESTART_WAKE -> reevaluate()
+            Recovery.CLOSE_WAKE -> { if (sessionKind == SessionKind.WAKE) cancelSession(destroy = false); reevaluate() }
+            Recovery.NONE -> {}
+        }
+    }
 
     private val _pendingAction = MutableStateFlow<PendingVoiceAction?>(null)
     val pendingAction: StateFlow<PendingVoiceAction?> = _pendingAction.asStateFlow()

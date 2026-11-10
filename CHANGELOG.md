@@ -2,6 +2,15 @@
 
 Every update gets a new version. Check yours in **Settings** (bottom of the screen): `MochiLife <version> (build <code>)`.
 
+## 2.3 (build 14)
+Phase 1 of the launch plan: reliability.
+- Voice watchdog: the voice system now always knows what it is doing (off, ready, waiting for her name, listening, thinking, speaking, paused) and resets anything stuck too long (thinking over 30 s, speaking over 2 min, mic open over 45 s, wake listener missing or left on). Every reset is written to the voice log.
+- The home screen shows "Speaking" and "Paused: another app is using the mic" besides listening and thinking.
+- Alarms and timers by voice are now understood on the phone (English, Arabic, Persian, Arabic and Persian digits, am/pm, every day, weekdays, weekends, "half an hour"): instant and no AI quota. "Show my alarms" too. Cancelling or changing an alarm still goes to the AI.
+- Alarm and timer requests check that a Clock app answers before claiming success, log which app handled the request, and say plainly when none does or permission is missing (the cause of "alarm doesn't work" will now show in the voice log).
+- Crash and error reports (Firebase Crashlytics) with a switch in Settings; reports never include what you say. Watchdog resets are sent as non-fatal reports.
+- Reliability gate: a corpus of 63 everyday requests in three languages runs on every test run and the build fails below 95%. Add any phrase that fails in real life to `CommandCorpusTest`, then fix the parser.
+
 ## 2.2 (build 13)
 **New listening and speaking design.**
 - **AI listening (new default)**: the phone records your turn with echo cancellation and noise suppression, a voice detector notices when you start and finish (it waits through short thinking pauses), and the recording goes straight to Gemini, which hears it in any language or mix (Arabic dialects, Persian, English) and answers in the same request. Android's speech recogniser is no longer used for this: no single language to get stuck in ("Persian" can't turn into "Russian" any more), no beeps, no cut-offs, no "not understood" loops. Names are written the way you say them. If the AI quota runs out, she switches to the phone's recogniser for an hour automatically. Settings → AI listening.

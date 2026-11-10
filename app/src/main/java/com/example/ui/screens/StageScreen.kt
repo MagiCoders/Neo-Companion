@@ -132,6 +132,7 @@ fun StageScreen(
     onOpenProfile: () -> Unit = {},
     moodToneLabel: String = "",
     wakeWordEnabled: Boolean = false,
+    voicePhase: com.example.ai.VoicePhase? = null,
     executedOrCancelledTurnIds: Set<String> = emptySet(),
     onCancelTurnAction: (String) -> Unit = {},
     onExecuteTurnActionNow: (CompanionChatTurn) -> Unit = {},
@@ -214,6 +215,8 @@ fun StageScreen(
 
             // Live Mood & Voice State Indicator Pill directly below character
             val stateBadgeText = when {
+                voicePhase == com.example.ai.VoicePhase.PAUSED -> "Paused: another app is using the mic"
+                voicePhase == com.example.ai.VoicePhase.SPEAKING -> "Speaking"
                 isThinking || runtimeState is CharacterRuntimeState.Thinking -> "Thinking..."
                 isListeningMic || runtimeState is CharacterRuntimeState.Listening -> "Listening..."
                 runtimeState is CharacterRuntimeState.Talking -> "Speaking"

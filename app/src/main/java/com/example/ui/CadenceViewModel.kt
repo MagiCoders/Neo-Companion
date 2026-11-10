@@ -66,6 +66,7 @@ class CadenceViewModel(
 
     val pendingVoiceAction: StateFlow<PendingVoiceAction?> = voiceCommandService.pendingAction
     val isWakeWordListeningActive: StateFlow<Boolean> = voiceCommandService.isActivelyListening
+    val voicePhase: StateFlow<com.example.ai.VoicePhase> = voiceCommandService.phase
     val liveVoicePartialTranscript: StateFlow<String> = voiceCommandService.livePartialTranscript
 
     // --- HashRouter Navigation State Management ---

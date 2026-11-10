@@ -7,6 +7,7 @@ plugins {
   // alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.secrets)
   alias(libs.plugins.google.services)
+  alias(libs.plugins.firebase.crashlytics.plugin)
 }
 
 android {
@@ -17,8 +18,8 @@ android {
     applicationId = "com.aistudio.cadence.mxkprz"
     minSdk = 24
     targetSdk = 36
-    versionCode = 13
-    versionName = "2.2"
+    versionCode = 14
+    versionName = "2.3"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -140,6 +141,8 @@ dependencies {
   // Uncomment ALL FOUR of the following dependencies together to use Firebase Auth and Google
   // Sign-In via Credential Manager:
   implementation(libs.firebase.auth)
+  // Crash and error reports (user can switch off in Settings)
+  implementation(libs.firebase.crashlytics)
   implementation(libs.androidx.credentials)
   implementation(libs.androidx.credentials.play.services)
   implementation(libs.googleid)

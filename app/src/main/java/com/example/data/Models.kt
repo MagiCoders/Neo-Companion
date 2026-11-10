@@ -79,6 +79,7 @@ data class MochiPersistentSettings(
     val liveVoiceChat: Boolean = false,
     /** Hide the beep Android plays when the microphone opens and closes. */
     val silentListening: Boolean = true,
+    val crashReports: Boolean = true,
     /** The AI hears your voice directly (any language, best accuracy). Off: the phone's recogniser. */
     val aiListening: Boolean = true,
     /** Natural AI voice (accents, Arabic dialects, Persian). Off: the phone's built-in voice. */

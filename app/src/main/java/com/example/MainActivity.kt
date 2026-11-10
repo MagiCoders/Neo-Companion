@@ -348,6 +348,7 @@ fun MochiAppHost(
     val pendingVoiceAction by viewModel.pendingVoiceAction.collectAsStateWithLifecycle()
     val isWakeWordListeningActive by viewModel.isWakeWordListeningActive.collectAsStateWithLifecycle()
     val livePartialTranscript by viewModel.liveVoicePartialTranscript.collectAsStateWithLifecycle()
+    val voicePhase by viewModel.voicePhase.collectAsStateWithLifecycle()
     val liveStatus by viewModel.liveStatus.collectAsStateWithLifecycle()
     val libraryEntries by viewModel.libraryEntries.collectAsStateWithLifecycle()
     val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
@@ -573,6 +574,7 @@ fun MochiAppHost(
                             },
                             moodToneLabel = currentMoodTone,
                             wakeWordEnabled = settings.wakeWordEnabled,
+                            voicePhase = voicePhase,
                             executedOrCancelledTurnIds = executedOrCancelledTurnIds,
                             onCancelTurnAction = viewModel::markTurnCancelled,
                             onExecuteTurnActionNow = { turn ->

@@ -823,6 +823,19 @@ fun ProfileAndSettingsScreen(
                 palette = p,
                 onCheckedChange = { enabled -> onUpdateSettings { it.copy(liveVoiceChat = enabled) } }
             )
+            HairlineDivider(p.hairline)
+            SettingsIconToggleRow(
+                icon = Icons.Outlined.Language,
+                title = "Send crash reports",
+                subtitle = "Helps fix problems. Contains the error and phone model only, never what you say or your contacts.",
+                checked = settings.crashReports,
+                accent = accent,
+                palette = p,
+                onCheckedChange = { enabled ->
+                    com.example.ai.CrashReports.setEnabled(enabled)
+                    onUpdateSettings { it.copy(crashReports = enabled) }
+                }
+            )
         }
 
         Text(

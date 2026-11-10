@@ -3,6 +3,7 @@ package com.example.actions
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import com.example.ai.VoiceLog
 import android.provider.AlarmClock
 import android.provider.CalendarContract
 import org.json.JSONObject
@@ -73,13 +74,27 @@ class AlarmActions(private val context: Context) {
         }
     }
 
-    private inline fun start(intent: Intent, failure: String, success: () -> String): ActionOutcome = try {
-        context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        ActionOutcome.Done(success(), speak = true)
-    } catch (_: ActivityNotFoundException) {
-        ActionOutcome.Failed(failure)
-    } catch (_: SecurityException) {
-        ActionOutcome.Failed(failure)
+    /**
+     * Starts the Clock app's intent only when some app on the phone actually handles it, and logs
+     * which one (so "alarm doesn't work" can be told apart from "no Clock app answers").
+     */
+    private inline fun start(intent: Intent, failure: String, success: () -> String): ActionOutcome {
+        val handler = try { intent.resolveActivity(context.packageManager) } catch (_: Throwable) { null }
+        if (handler == null) {
+            VoiceLog.add(VoiceLog.Kind.ERROR, "No app on this phone handles ${intent.action}")
+            return ActionOutcome.Failed("$failure No Clock app on this phone answers that request.")
+        }
+        VoiceLog.add(VoiceLog.Kind.SPOKE, "${intent.action?.substringAfterLast('.')} handled by ${handler.packageName}")
+        return try {
+            context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            ActionOutcome.Done(success(), speak = true)
+        } catch (e: ActivityNotFoundException) {
+            VoiceLog.add(VoiceLog.Kind.ERROR, "Clock app refused: ActivityNotFound")
+            ActionOutcome.Failed(failure)
+        } catch (e: SecurityException) {
+            VoiceLog.add(VoiceLog.Kind.ERROR, "Clock app refused: ${e.message?.take(80)}")
+            ActionOutcome.Failed("$failure The Clock app needs permission to set alarms from this app.")
+        }
     }
 
     companion object {

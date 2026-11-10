@@ -65,6 +65,10 @@ object LocalCommands {
     fun parse(text: String, languageTag: String): CompanionChatTurn? {
         val t = text.trim().trimEnd('.', '!', '؟', '?').replace(Regex("\\s+"), " ")
         if (t.isEmpty() || t.length > 120) return null
+        LocalTimeCommands.parse(t)?.let { p ->
+            if (MULTI_STEP.containsMatchIn(t)) return null
+            return timeTurn(p, languageTag)
+        }
         for (rule in rules) {
             val m = rule.regex.matchEntire(t) ?: continue
             // Multi-step requests ("open WhatsApp and call Ali") need the AI to plan them.
@@ -114,6 +118,20 @@ object LocalCommands {
         val name = cleanName(raw) ?: return null
         if (name.split(" ").size > 3) return null
         return turn(CompanionActionType.OPEN_APP, say(lang, "Opening $name.", "دا أفتح $name.", "دارم $name رو باز می‌کنم."), lang, payload = name)
+    }
+
+    private fun timeTurn(p: LocalTimeCommands.Parsed, lang: String): CompanionChatTurn = when (p) {
+        is LocalTimeCommands.Parsed.Alarm -> {
+            val hhmm = "%02d:%02d".format(p.hour, p.minute)
+            turn(CompanionActionType.SET_ALARM, say(lang, "Setting an alarm for $hhmm.", "راح أضبط منبه الساعة $hhmm.", "دارم زنگ ساعت $hhmm رو تنظیم می‌کنم."), lang, payload = LocalTimeCommands.payload(p))
+        }
+        is LocalTimeCommands.Parsed.Timer -> {
+            val mins = p.seconds / 60
+            val text = if (p.seconds % 60 == 0 && mins > 0) "$mins min" else "${p.seconds} s"
+            turn(CompanionActionType.SET_TIMER, say(lang, "Starting a timer for $text.", "راح أشغل مؤقت $text.", "دارم تایمر $text رو شروع می‌کنم."), lang, payload = LocalTimeCommands.payload(p))
+        }
+        LocalTimeCommands.Parsed.ShowAlarms ->
+            turn(CompanionActionType.SHOW_ALARMS, say(lang, "Here are your alarms.", "هاي منبهاتك.", "این هم زنگ‌هات."), lang)
     }
 
     private fun simple(type: CompanionActionType, lang: String) =
