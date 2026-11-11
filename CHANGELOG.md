@@ -2,6 +2,16 @@
 
 Every update gets a new version. Check yours in **Settings** (bottom of the screen): `MochiLife <version> (build <code>)`.
 
+## 2.6 (build 17)
+Speed and "is she listening?" fixes from the second S22+ log.
+- Her voice is streamed: she starts talking when the first sound arrives instead of after the whole sentence is prepared (it was 3.5–3.8 s every time). If streaming is not available she falls back to the old way, then to the phone's voice.
+- Fixed lines are kept on the phone: her one-word answer to her name ("Yes?", "تفضل", "جانم؟"), "anything else?" and the goodbyes are prepared once in the background per language and then play instantly, also after restarting the app.
+- She answers her name again, with that one word, then the mic opens. Until it is prepared (first minute, offline) she beeps and listens at once.
+- The same soft beep every time the mic opens, louder than before, so you know when it is your turn. The pause before the mic reopens after she speaks is shorter (0.35 s).
+- "No speech heard" now reports numbers (how loud the loudest sound was and how loud speech had to be) and keeps that recording too, so "Play what she heard" works when she did not react.
+- The log line "Her voice started N s after you finished speaking" now measures until sound actually comes out, not until she starts preparing it.
+- Wake listener: the room-noise level is now a running average, so ordinary room noise no longer reopens the sound gate (it was still decoding 66% of the time).
+
 ## 2.5 (build 16)
 Fixes from the first S22+ voice log of 2.4.
 - She listens at once after her name: a short chime, then the mic is open in a fraction of a second. The spoken greeting is gone (it took 3–6 s to prepare, so the start of your request was lost and the AI then "heard no request").

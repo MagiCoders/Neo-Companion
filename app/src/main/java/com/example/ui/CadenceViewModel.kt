@@ -181,6 +181,7 @@ class CadenceViewModel(
         updateSettings { it.copy(preferredLanguage = label) }
         com.example.ai.VoiceLog.add(com.example.ai.VoiceLog.Kind.AI, "Voice language → $label")
         checkVoiceInstalled(tag)
+        prepareVoiceLines()
         return tag
     }
 
@@ -513,6 +514,8 @@ class CadenceViewModel(
     init {
         applyVoiceSettings(_settings.value)
         refreshRecognitionNames()
+        com.example.ai.NaturalVoice.init(appContext)
+        viewModelScope.launch { kotlinx.coroutines.delay(4_000L); prepareVoiceLines() }
         viewModelScope.launch {
             voiceCommandService.languageRequests.collect { tag ->
                 switchVoiceLanguage(tag)
@@ -532,10 +535,36 @@ class CadenceViewModel(
                 // (A spoken greeting took 3–6 s, so the start of the request was lost.) The mic
                 // reopens after every reply until the user says bye or goes quiet.
                 voiceCommandService.startConversation()
-                com.example.ai.Earcon.listening()
-                characterController.transitionTo(CharacterRuntimeState.Listening)
-                voiceCommandService.startPersistentListeningLoop(forceImmediateCommandCapture = true)
+                val tts = speechEngine
+                val tag = java.util.Locale.forLanguageTag(com.example.ai.VoiceLanguages.tagFor(_settings.value.preferredLanguage)).toLanguageTag()
+                val greeting = WAKE_ANSWER[tag.substringBefore('-')]
+                if (tts != null && greeting != null && com.example.ai.NaturalVoice.isReady(greeting, tag, _selectedCharacter.value)) {
+                    // A one-word answer already kept on the phone: plays at once, then the mic opens.
+                    characterController.speakWithLipSync(appContext, tts, greeting, _selectedCharacter.value, tag)
+                } else {
+                    // Not prepared yet (first use, offline, no quota): beep and listen right away.
+                    characterController.transitionTo(CharacterRuntimeState.Listening)
+                    voiceCommandService.startPersistentListeningLoop(forceImmediateCommandCapture = true)
+                    prepareVoiceLines()
+                }
             }
+        }
+    }
+
+    /**
+     * Prepares her fixed lines (the one-word answer to her name, "anything else?", goodbyes) in the
+     * natural voice once per language and character, so they play instantly afterwards.
+     */
+    private var prepareJob: kotlinx.coroutines.Job? = null
+    private fun prepareVoiceLines() {
+        if (!_settings.value.naturalVoice || prepareJob?.isActive == true) return
+        val tag = java.util.Locale.forLanguageTag(com.example.ai.VoiceLanguages.tagFor(_settings.value.preferredLanguage)).toLanguageTag()
+        val short = tag.substringBefore('-')
+        val lines = listOfNotNull(WAKE_ANSWER[short]) + (IDLE_LINES[short] ?: IDLE_LINES.getValue("en")).values.flatten()
+        val character = _selectedCharacter.value
+        prepareJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            com.example.ai.NaturalVoice.init(appContext)
+            runCatching { com.example.ai.NaturalVoice.prepare(lines, tag, character) }
         }
     }
 
@@ -1419,6 +1448,9 @@ class CadenceViewModel(
     }
 
     companion object {
+        /** Her one-word answer to her name (short, so the mic opens almost at once). */
+        private val WAKE_ANSWER = mapOf("en" to "Yes?", "ar" to "تفضل", "fa" to "جانم؟")
+
         private val IDLE_LINES: Map<String, Map<VoiceCommandService.Idle, List<String>>> = mapOf(
             "en" to mapOf(
                 VoiceCommandService.Idle.NOT_UNDERSTOOD to listOf("Sorry, I didn't catch that. Could you say it again?", "Sorry, could you repeat that?"),

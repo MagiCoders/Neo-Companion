@@ -26,8 +26,11 @@ class SpeechCapture(
     private val onSpeechStarted: () -> Unit,
     /** A 16 kHz mono WAV of the whole utterance (with a little lead-in). */
     private val onUtterance: (ByteArray) -> Unit,
-    /** Nothing was said before the timeout. */
-    private val onNoSpeech: () -> Unit,
+    /**
+     * Nothing was said before the timeout: what the mic picked up meanwhile (WAV), the loudest
+     * level in it and the level speech had to reach, so "she didn't hear me" can be checked.
+     */
+    private val onNoSpeech: (ByteArray, Double, Double) -> Unit,
     private val onError: (String) -> Unit
 ) {
     private val main = Handler(Looper.getMainLooper())
@@ -72,6 +75,7 @@ class SpeechCapture(
         val frame = ShortArray(FRAME)
         val preRoll = ArrayDeque<ShortArray>()
         val speech = ByteArrayOutputStream()
+        val everything = ByteArrayOutputStream() // the whole wait, for the no-speech report
         var outcome: (() -> Unit)? = null
         try {
             record.startRecording()
@@ -79,6 +83,7 @@ class SpeechCapture(
                 val n = record.read(frame, 0, FRAME)
                 if (n <= 0) { if (n < 0) { outcome = { onError("Microphone error $n") }; break }; continue }
                 val chunk = frame.copyOf(n)
+                if (everything.size() < RATE * 2 * 12) everything.write(toBytes(chunk))
                 val event = vad.feed(rms(chunk))
                 main.post { onLevel(vad.lastDb) }
                 when (event) {
@@ -96,7 +101,13 @@ class SpeechCapture(
                         break
                     }
                     VoiceActivity.Event.FALSE_START -> speech.reset()
-                    VoiceActivity.Event.TIMEOUT -> { outcome = onNoSpeech; break }
+                    VoiceActivity.Event.TIMEOUT -> {
+                        val heard = wav(everything.toByteArray())
+                        val loudest = vad.peakRms
+                        val needed = vad.lastThreshold
+                        outcome = { onNoSpeech(heard, loudest, needed) }
+                        break
+                    }
                     VoiceActivity.Event.SILENCE -> {
                         preRoll.addLast(chunk)
                         while (preRoll.size > PRE_ROLL_FRAMES) preRoll.removeFirst()
@@ -191,11 +202,18 @@ class VoiceActivity(
     private var waitedFrames = 0
     var lastDb = 0f
         private set
+    /** Loudest frame so far and the level a frame must pass to count as speech (raw 16-bit RMS). */
+    var peakRms = 0.0
+        private set
+    var lastThreshold = 0.0
+        private set
 
     fun feed(rms: Double): Event {
         lastDb = (20 * log10(max(rms, 1.0))).toFloat()
         if (noiseFloor < 0) noiseFloor = max(rms, MIN_FLOOR)
         val threshold = max(noiseFloor * START_RATIO, MIN_SPEECH_RMS)
+        lastThreshold = threshold
+        if (rms > peakRms) peakRms = rms
         val loud = rms > threshold
         if (!inSpeech) {
             waitedFrames++

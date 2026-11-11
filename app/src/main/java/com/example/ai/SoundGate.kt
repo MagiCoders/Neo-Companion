@@ -46,8 +46,10 @@ class SoundGate(
         val threshold = maxOf(floor * openRatio, minOpenRms)
         val loud = rms > threshold
         if (!open) {
-            // The floor follows the room: quickly down, slowly up.
-            floor = if (rms < floor) floor * 0.7 + rms * 0.3 else floor * 0.98 + rms * 0.02
+            // While the gate is closed everything heard is the room, so the floor is simply its
+            // running average (a floor that dropped at every quiet instant reopened the gate on
+            // ordinary room noise: 66% decoding on the S22+).
+            floor = floor * 0.95 + rms * 0.05
             floor = maxOf(floor, MIN_FLOOR)
             if (!loud) return Decision.SKIP
             open = true

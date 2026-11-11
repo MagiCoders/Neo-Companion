@@ -92,7 +92,7 @@ class VoiceCommandService(
         /** Safety net: stop waiting for a reply after this long. */
         private const val AWAIT_REPLY_TIMEOUT_MS = 20_000L
         /** Pause after she stops talking before a follow-up listen, so the room echo has died down. */
-        private const val FOLLOW_UP_DELAY_MS = 600L
+        private const val FOLLOW_UP_DELAY_MS = 350L
         /** Pause that ends the user's turn (Android's default is shorter and cuts people off). */
         private const val END_OF_SPEECH_SILENCE_MS = 1_800L
         /** Quiet turns in a row before she says goodbye and stops listening. */
@@ -130,6 +130,16 @@ class VoiceCommandService(
         fun unregisterSpeaker(stop: () -> Unit) { activeSpeakers -= stop }
 
         /** What the companion just said aloud, so an echo of it is never taken as a command. */
+        /** The first sound of her answer is coming out of the speaker now. */
+        fun notifyVoiceStarted() {
+            INSTANCE?.let { svc -> svc.runOnMain {
+                if (svc.speechEndAt > 0) {
+                    VoiceLog.add(VoiceLog.Kind.SPOKE, "Her voice started %.1f s after you finished speaking".format((System.currentTimeMillis() - svc.speechEndAt) / 1000.0))
+                    svc.speechEndAt = 0L
+                }
+            } }
+        }
+
         fun notifyAssistantSaid(text: String) {
             VoiceLog.add(VoiceLog.Kind.SPOKE, "\"$text\"")
             INSTANCE?.let { svc -> svc.runOnMain { svc.echoGuard.remember(text) } }
@@ -578,10 +588,6 @@ class VoiceCommandService(
         runOnMain {
             if (assistantSpeaking == speaking) return@runOnMain
             assistantSpeaking = speaking
-            if (speaking && speechEndAt > 0) {
-                VoiceLog.add(VoiceLog.Kind.SPOKE, "She started answering %.1f s after you finished speaking".format((System.currentTimeMillis() - speechEndAt) / 1000.0))
-                speechEndAt = 0L
-            }
             if (speaking) {
                 awaitingReply = false
                 awaitReplyJob?.cancel()
@@ -750,9 +756,10 @@ class VoiceCommandService(
                 _livePartialTranscript.value = ""
                 deliverAudio(wav)
             },
-            onNoSpeech = {
+            onNoSpeech = { wav, loudest, needed ->
                 capture = null
-                VoiceLog.add(VoiceLog.Kind.IGNORED, "No speech heard")
+                VoiceLog.add(VoiceLog.Kind.IGNORED, "No speech heard in %.0f s (loudest sound %.0f, speech needs %.0f). Play it back in Diagnostics.".format((wav.size - 44) / 32_000.0, loudest, needed))
+                scope.launch(Dispatchers.IO) { runCatching { lastHeardFile(appContext).writeBytes(wav) } }
                 onSessionEnded()
                 _livePartialTranscript.value = ""
                 handleQuietTurn(notUnderstood = false)
@@ -769,6 +776,7 @@ class VoiceCommandService(
         _isActivelyListening.value = true
         _isWakeLoopRunning.value = false
         _livePartialTranscript.value = ""
+        Earcon.listening() // "your turn": the same soft beep every time the mic opens
         c.start()
         val sinceWake = System.currentTimeMillis() - wakeAt
         VoiceLog.add(VoiceLog.Kind.HEARD, "Mic open, the AI is listening" + if (wakeAt > 0 && sinceWake < 15_000) " (%.1f s after her name)".format(sinceWake / 1000.0) else "")

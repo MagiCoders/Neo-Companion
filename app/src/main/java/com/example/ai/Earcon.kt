@@ -11,8 +11,8 @@ object Earcon {
     @Synchronized
     fun listening() {
         try {
-            val t = tone ?: ToneGenerator(AudioManager.STREAM_MUSIC, 45).also { tone = it }
-            t.startTone(ToneGenerator.TONE_PROP_BEEP, 60)
+            val t = tone ?: ToneGenerator(AudioManager.STREAM_MUSIC, 80).also { tone = it }
+            t.startTone(ToneGenerator.TONE_PROP_BEEP, 80)
         } catch (_: Throwable) {
             tone = null
         }
