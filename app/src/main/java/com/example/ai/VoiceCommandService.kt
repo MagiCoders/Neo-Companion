@@ -95,7 +95,6 @@ class VoiceCommandService(
         /** Quiet turns in a row before she says goodbye and stops listening. */
         private const val MAX_QUIET_TURNS = 2
         /** How long the speech recogniser's own recording may linger after it stops. */
-        private const val RECOGNIZER_RELEASE_MS = 1_500L
 
         private fun phraseRegex(words: List<String>): Regex =
             Regex("(?i)^\\W*" + words.joinToString("\\W+") { Regex.escape(it) } + "\\b[,.!?\\s]*")
@@ -169,7 +168,6 @@ class VoiceCommandService(
     // ---- Another app using the microphone (a call, a voice note, a recorder) ----
     private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
     private var otherAppUsingMic = false
-    private var commandEndedAt = 0L
     private val recordingCallback = object : android.media.AudioManager.AudioRecordingCallback() {
         override fun onRecordingConfigChanged(configs: MutableList<android.media.AudioRecordingConfiguration>) {
             runOnMain { checkOtherRecorders() }
@@ -177,7 +175,15 @@ class VoiceCommandService(
     }
 
     init {
-        scope.launch(Dispatchers.Main) { while (true) { delay(1_000L); tickPhase() } }
+        scope.launch(Dispatchers.Main) {
+            var ticks = 0
+            while (true) {
+                delay(1_000L)
+                checkOtherRecorders()
+                tickPhase()
+                if (++ticks % 5 == 0) launch(Dispatchers.Default) { PerfMeter.sample() }
+            }
+        }
         try { audioManager.registerAudioRecordingCallback(recordingCallback, mainHandler) } catch (_: Throwable) {}
         if (Build.VERSION.SDK_INT >= 31) {
             try { audioManager.addOnModeChangedListener({ mainHandler.post(it) }) { runOnMain { checkOtherRecorders() } } } catch (_: Throwable) {}
@@ -185,33 +191,47 @@ class VoiceCommandService(
     }
 
     /**
-     * Pauses all listening while another app records or a call is going on, and resumes after.
-     * Our own speech recogniser runs in another process, so its recording is ignored while it is
-     * on and for a moment after it stops.
+     * Steps back from the microphone only when Android says so: a call is in progress, or Android
+     * silenced one of her own recorders because another app took the mic. Background helpers such
+     * as "Hey Google" or Bixby, and her own recorders, never count. During a call all listening
+     * stops; when silenced, the wake listener stays open (it costs nothing on silence) so she
+     * notices the moment the mic is hers again.
      */
+    private val micContention = MicContention()
+    private var pausedForCall = false
+
+    private fun ownSessionIds(): Set<Int> =
+        setOf(wakeEngine.activeSessionId, capture?.sessionId ?: -1) - (-1)
+
     private fun checkOtherRecorders() {
-        if (sessionKind == SessionKind.COMMAND || liveCallActive) return
-        val sinceCommand = System.currentTimeMillis() - commandEndedAt
-        if (sinceCommand < RECOGNIZER_RELEASE_MS) {
-            mainHandler.postDelayed({ checkOtherRecorders() }, RECOGNIZER_RELEASE_MS - sinceCommand + 50L)
-            return
-        }
-        val mine = wakeEngine.activeSessionId
-        val others = try {
-            audioManager.activeRecordingConfigurations.count { it.clientAudioSessionId != mine }
-        } catch (_: Throwable) { 0 }
         val mode = audioManager.mode
         val inCall = mode == android.media.AudioManager.MODE_IN_CALL || mode == android.media.AudioManager.MODE_IN_COMMUNICATION
-        val busy = others > 0 || inCall
-        if (busy == otherAppUsingMic) return
-        otherAppUsingMic = busy
-        if (busy) {
-            VoiceLog.add(VoiceLog.Kind.IGNORED, if (inCall) "Paused: a call is in progress" else "Paused: another app is using the microphone")
-            endConversation("another app needs the mic")
-            if (sessionKind != null) cancelSession(destroy = false)
-        } else {
-            VoiceLog.add(VoiceLog.Kind.WAKE, "Microphone free again, listening resumed")
-            reevaluate(delayMs = WAKE_RESTART_MS)
+        val mine = ownSessionIds()
+        val silenced = Build.VERSION.SDK_INT >= 29 && mine.isNotEmpty() && try {
+            audioManager.activeRecordingConfigurations.any { it.clientAudioSessionId in mine && it.isClientSilenced }
+        } catch (_: Throwable) { false }
+        val change = micContention.update(MicContention.Sample(silenced, inCall), System.currentTimeMillis()) ?: return
+        when (change) {
+            MicContention.State.CALL -> {
+                otherAppUsingMic = true
+                pausedForCall = true
+                VoiceLog.add(VoiceLog.Kind.IGNORED, "Paused: a call is in progress (audio mode $mode)")
+                endConversation("a call started")
+                if (sessionKind != null) cancelSession(destroy = false)
+            }
+            MicContention.State.SILENCED -> {
+                otherAppUsingMic = true
+                pausedForCall = false
+                VoiceLog.add(VoiceLog.Kind.IGNORED, "Paused: Android gave the microphone to another app (her recorder ${mine.joinToString()} silenced)")
+                endConversation("another app needs the mic")
+                if (sessionKind == SessionKind.COMMAND) cancelSession(destroy = false)
+            }
+            MicContention.State.FREE -> {
+                otherAppUsingMic = false
+                pausedForCall = false
+                VoiceLog.add(VoiceLog.Kind.WAKE, "Microphone is hers again, listening resumed")
+                reevaluate(delayMs = WAKE_RESTART_MS)
+            }
         }
     }
 
@@ -612,7 +632,7 @@ class VoiceCommandService(
      * also while she is talking, so "Hey Mochi" or "stop" can interrupt her.
      */
     private fun wantsWakeSession(): Boolean =
-        hosts.isNotEmpty() && hasRecordPermission && !liveCallActive && !wakeLoopSuspended && !otherAppUsingMic &&
+        hosts.isNotEmpty() && hasRecordPermission && !liveCallActive && !wakeLoopSuspended && !pausedForCall &&
             (assistantSpeaking || (_isWakeWordEnabled.value && !awaitingReply))
 
     fun setLiveCallActive(active: Boolean) {
@@ -706,6 +726,11 @@ class VoiceCommandService(
     /** One spoken turn recorded for the AI (see [SpeechCapture]): any language, no beeps. */
     private fun startCapture() {
         restartListeningJob?.cancel()
+        if (otherAppUsingMic) {
+            VoiceLog.add(VoiceLog.Kind.IGNORED, "Not listening: another app has the microphone right now")
+            _lastError.value = "Another app is using the microphone right now. Try again when it's done."
+            return
+        }
         if (sessionKind != null) cancelSession(destroy = false)
         val c = SpeechCapture(
             onLevel = { db -> if (sessionKind == SessionKind.COMMAND) _micRmsDb.value = ((db - 30f) / 4f).coerceIn(0f, 10f) },
@@ -840,7 +865,6 @@ class VoiceCommandService(
         beeps.unmute()
         capture?.stop()
         capture = null
-        if (sessionKind == SessionKind.COMMAND) commandEndedAt = System.currentTimeMillis()
         val hadSession = sessionKind != null
         sessionKind = null
         _isActivelyListening.value = false
@@ -861,7 +885,6 @@ class VoiceCommandService(
     }
 
     private fun onSessionEnded() {
-        if (sessionKind == SessionKind.COMMAND) commandEndedAt = System.currentTimeMillis()
         sessionKind = null
         _isActivelyListening.value = false
         _isWakeLoopRunning.value = false

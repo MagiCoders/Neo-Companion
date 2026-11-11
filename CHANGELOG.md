@@ -2,6 +2,16 @@
 
 Every update gets a new version. Check yours in **Settings** (bottom of the screen): `MochiLife <version> (build <code>)`.
 
+## 2.4 (build 15)
+Fixes for heavy CPU use and the false "another app is using the mic" pause.
+- Mic check rebuilt. She no longer counts recorders (that counted her own recorders and always-on helpers such as "Hey Google" and Bixby). She steps back only when Android reports that it silenced her recorder for another app, or a call is in progress, and only after it has held for one second. When silenced, the wake listener stays open so she resumes the moment the mic is hers. The voice log says which signal caused a pause.
+- Tapping the mic while another app really has it now says so instead of listening to silence.
+- Wake listener rests in quiet rooms: a cheap loudness check comes first and speech decoding runs only when there is sound, with a short lead-in so the start of her name is never cut.
+- 3D Mochi drawn at 30 frames a second instead of every screen refresh (up to 120 on the S22+); the sparkle layer and pose loop capped at 30 (20 in the floating bubble); the app asks the screen for 60 Hz.
+- An unused test model that was loaded every time the home screen opened has been removed.
+- Performance meter in Settings → Diagnostics: average and peak CPU over the last minute, memory, 3D frames per second and how often the wake listener decodes. Included when you copy the voice log.
+- Language chip on the home screen: tap to switch English → Arabic (your dialect) → Persian.
+
 ## 2.3 (build 14)
 Phase 1 of the launch plan: reliability.
 - Voice watchdog: the voice system now always knows what it is doing (off, ready, waiting for her name, listening, thinking, speaking, paused) and resets anything stuck too long (thinking over 30 s, speaking over 2 min, mic open over 45 s, wake listener missing or left on). Every reset is written to the voice log.

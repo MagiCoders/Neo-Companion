@@ -119,7 +119,6 @@ fun CharacterStageView(
     )
 
     LaunchedEffect(character.assetFile) {
-        GlbLoader.verifyStartupTestAsset(context)
         if (loadedModel == null) {
             loadedModel = GlbLoader.loadGlbAsset(context, character.assetFile)
         }

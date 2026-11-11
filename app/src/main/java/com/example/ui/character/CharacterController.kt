@@ -90,7 +90,7 @@ class CharacterController(
     @Volatile
     private var isPaused = false
     @Volatile
-    private var frameDelayMs = 16L
+    private var frameDelayMs = 33L
     @Volatile
     private var isReducedMode = false
 
@@ -148,7 +148,7 @@ class CharacterController(
 
     fun setReducedBubbleMode(enabled: Boolean) {
         isReducedMode = enabled
-        frameDelayMs = if (enabled) 33L else 16L // 30 fps in PiP/floating bubble, 60 fps on Stage
+        frameDelayMs = if (enabled) 50L else 33L // 20 fps in the floating bubble, 30 fps on Stage (plenty for a soft character)
         if (enabled && _state.value !is CharacterRuntimeState.Idle && _state.value !is CharacterRuntimeState.Talking) {
             transitionTo(CharacterRuntimeState.Idle)
         }

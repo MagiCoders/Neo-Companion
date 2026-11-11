@@ -36,6 +36,10 @@ class SpeechCapture(
 
     val isRunning: Boolean get() = running
 
+    /** The recorder's audio session (to recognise her own recording in Android's list), -1 if none. */
+    @Volatile var sessionId = -1
+        private set
+
     fun start(): Boolean {
         if (running) return true
         running = true
@@ -59,6 +63,7 @@ class SpeechCapture(
             main.post { onError("The microphone is busy.") }
             return
         }
+        sessionId = record.audioSessionId
         val effects = buildList {
             if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(record.audioSessionId)?.let { it.enabled = true; add(it) }
             if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(record.audioSessionId)?.let { it.enabled = true; add(it) }
@@ -104,6 +109,7 @@ class SpeechCapture(
             effects.forEach { try { it.release() } catch (_: Throwable) {} }
             try { record.stop() } catch (_: Throwable) {}
             record.release()
+            sessionId = -1
             val deliver = outcome
             val wasRunning = running
             running = false

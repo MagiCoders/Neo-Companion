@@ -340,6 +340,9 @@ class OfflineWakeWord(context: Context) {
 
         private fun loop() {
             val buf = ShortArray(SAMPLE_RATE / 10)
+            // Decode only when there is sound; quiet blocks are kept as lead-in.
+            val gate = SoundGate()
+            val leadIn = ArrayDeque<ShortArray>()
             try {
                 while (running) {
                     val n = record?.read(buf, 0, buf.size) ?: break
@@ -348,7 +351,25 @@ class OfflineWakeWord(context: Context) {
                         break
                     }
                     val rec = recognizer ?: break
-                    if (n > 0 && rec.acceptWaveForm(buf, n)) deliver(rec.result)
+                    if (n == 0) continue
+                    val block = buf.copyOf(n)
+                    when (gate.decide(SpeechCapture.rms(block))) {
+                        SoundGate.Decision.SKIP -> {
+                            leadIn.addLast(block)
+                            while (leadIn.size > gate.preRollBlocks) leadIn.removeFirst()
+                        }
+                        SoundGate.Decision.OPEN -> {
+                            for (b in leadIn) if (rec.acceptWaveForm(b, b.size)) deliver(rec.result)
+                            leadIn.clear()
+                            if (rec.acceptWaveForm(block, n)) deliver(rec.result)
+                        }
+                        SoundGate.Decision.FEED -> if (rec.acceptWaveForm(block, n)) deliver(rec.result)
+                        SoundGate.Decision.CLOSE -> {
+                            if (rec.acceptWaveForm(block, n)) deliver(rec.result)
+                            deliver(rec.finalResult) // finishes the phrase and resets for the next one
+                        }
+                    }
+                    PerfMeter.wakeDecodedShare = gate.decodedShare()
                 }
             } catch (e: Throwable) {
                 if (running) main.post { if (session === this) { stop(); onError("Wake-word listening stopped: ${e.javaClass.simpleName}") } }

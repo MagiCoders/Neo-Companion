@@ -184,6 +184,26 @@ class CadenceViewModel(
         return tag
     }
 
+    /** The language chip on the home screen: English → Arabic (your dialect) → Persian → English. */
+    fun cycleVoiceLanguage() {
+        val current = com.example.ai.VoiceLanguages.tagFor(_settings.value.preferredLanguage).substringBefore('-')
+        val next = when (current) {
+            "en" -> "ar"
+            "ar" -> "fa-IR"
+            else -> "en-US"
+        }
+        switchVoiceLanguage(next)
+    }
+
+    /** Short label for the chip. */
+    fun voiceLanguageChip(preferredLanguage: String): String =
+        when (com.example.ai.VoiceLanguages.tagFor(preferredLanguage).substringBefore('-')) {
+            "ar" -> "عربي"
+            "fa" -> "فارسی"
+            "en" -> "EN"
+            else -> com.example.ai.VoiceLanguages.tagFor(preferredLanguage).substringBefore('-').uppercase()
+        }
+
     /** Warns (once per language) when the phone's speech engine has no voice for [tag]. */
     private fun checkVoiceInstalled(tag: String) {
         val tts = speechEngine ?: return

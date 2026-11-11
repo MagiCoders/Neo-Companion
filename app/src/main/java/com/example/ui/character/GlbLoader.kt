@@ -41,10 +41,6 @@ object GlbLoader {
 
     private val cache = ConcurrentHashMap<String, GlbLoadedModel>()
 
-    fun verifyStartupTestAsset(context: Context): GlbLoadedModel? {
-        return loadGlbAsset(context, "characters/test.glb")
-    }
-
     fun loadGlbAsset(context: Context, assetPath: String): GlbLoadedModel? {
         cache[assetPath]?.let { return it }
 

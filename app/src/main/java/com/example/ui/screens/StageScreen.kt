@@ -133,6 +133,8 @@ fun StageScreen(
     moodToneLabel: String = "",
     wakeWordEnabled: Boolean = false,
     voicePhase: com.example.ai.VoicePhase? = null,
+    voiceLanguageLabel: String? = null,
+    onCycleVoiceLanguage: (() -> Unit)? = null,
     executedOrCancelledTurnIds: Set<String> = emptySet(),
     onCancelTurnAction: (String) -> Unit = {},
     onExecuteTurnActionNow: (CompanionChatTurn) -> Unit = {},
@@ -255,6 +257,19 @@ fun StageScreen(
                     color = textPrimary,
                     modifier = Modifier.testTag("stage_mood_indicator")
                 )
+                if (voiceLanguageLabel != null && onCycleVoiceLanguage != null) {
+                    Text(
+                        text = voiceLanguageLabel,
+                        style = MochiType.Label.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold),
+                        color = accent,
+                        modifier = Modifier
+                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(50))
+                            .background(accent.copy(alpha = 0.14f))
+                            .clickable(onClickLabel = "Change voice language") { onCycleVoiceLanguage() }
+                            .padding(horizontal = 10.dp, vertical = 3.dp)
+                            .testTag("stage_language_chip")
+                    )
+                }
             }
         }
 

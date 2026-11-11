@@ -3041,6 +3041,20 @@ private fun DiagnosticsCard(p: SuitePalette) {
             }
         }
         HairlineDivider(p.hairline)
+        Text("Performance", style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold), color = p.textPrimary)
+        var perfMinute by remember { mutableStateOf<String?>(null) }
+        androidx.compose.runtime.LaunchedEffect(Unit) {
+            while (true) {
+                perfMinute = com.example.ai.PerfMeter.lastMinute()
+                kotlinx.coroutines.delay(2_000L)
+            }
+        }
+        Text(
+            perfMinute ?: "Measuring… Leave Mochi on the home screen for a minute, then come back here.",
+            style = MochiType.Label,
+            color = p.textTertiary
+        )
+        HairlineDivider(p.hairline)
         Text("Voice", style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold), color = p.textPrimary)
         Text(remember(voiceLog) { com.example.ai.VoiceCommandService.shared(context).wakeStatus }, style = MochiType.Label, color = p.textTertiary)
         if (voiceLog.isEmpty()) {
@@ -3053,6 +3067,7 @@ private fun DiagnosticsCard(p: SuitePalette) {
             DiagnosticsButton(if (copiedLog) "Copied" else "Copy voice log", p) {
                 clipboard.setText(androidx.compose.ui.text.AnnotatedString(
                     com.example.ai.VoiceCommandService.shared(context).wakeStatus + "\n" +
+                        (com.example.ai.PerfMeter.lastMinute()?.let { it + "\n" } ?: "") +
                         voiceLog.joinToString("\n") { "${timeFormat.format(java.util.Date(it.atMillis))} ${it.kind} ${it.text}" }
                 ))
                 copiedLog = true

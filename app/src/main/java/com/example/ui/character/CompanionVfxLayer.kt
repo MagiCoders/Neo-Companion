@@ -80,10 +80,13 @@ fun CompanionVfxLayer(
         var last = 0L
         while (true) {
             withFrameNanos { now ->
-                val dt = if (last == 0L) 0.016f else ((now - last) / 1e9f).coerceIn(0f, 0.05f)
-                last = now
-                engine.step(dt, currentState, currentMic)
-                frame++
+                // Step and redraw at most 30 times a second, whatever the screen's refresh rate.
+                if (last == 0L || now - last >= 31_000_000L) {
+                    val dt = if (last == 0L) 0.033f else ((now - last) / 1e9f).coerceIn(0f, 0.066f)
+                    last = now
+                    engine.step(dt, currentState, currentMic)
+                    frame++
+                }
             }
         }
     }

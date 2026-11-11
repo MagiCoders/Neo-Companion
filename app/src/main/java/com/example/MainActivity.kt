@@ -151,6 +151,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         configureAppCheck(this, intent)
         enableEdgeToEdge()
+        // Fast 120 Hz screens make every animation run twice as often; Mochi looks the same at 60.
+        window.attributes = window.attributes.also { it.preferredRefreshRate = 60f }
 
         setContent {
             MochiLifeRootContainer()
@@ -575,6 +577,8 @@ fun MochiAppHost(
                             moodToneLabel = currentMoodTone,
                             wakeWordEnabled = settings.wakeWordEnabled,
                             voicePhase = voicePhase,
+                            voiceLanguageLabel = viewModel.voiceLanguageChip(settings.preferredLanguage),
+                            onCycleVoiceLanguage = { viewModel.cycleVoiceLanguage() },
                             executedOrCancelledTurnIds = executedOrCancelledTurnIds,
                             onCancelTurnAction = viewModel::markTurnCancelled,
                             onExecuteTurnActionNow = { turn ->

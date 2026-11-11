@@ -307,6 +307,7 @@ class MochiSceneRenderer(
     private val work = FloatArray(16)
     private val tmp = FloatArray(16)
     private var lastFrameNanos = 0L
+    private var lastDrawNanos = 0L
     private var running = false
     private var aspect = 1f
 
@@ -314,7 +315,11 @@ class MochiSceneRenderer(
         override fun doFrame(frameTimeNanos: Long) {
             if (!running) return
             Choreographer.getInstance().postFrameCallback(this)
+            // 30 frames a second is plenty for a soft character; the screen may refresh at 120.
+            if (lastDrawNanos != 0L && frameTimeNanos - lastDrawNanos < MIN_FRAME_NANOS) return
+            lastDrawNanos = frameTimeNanos
             renderFrame(frameTimeNanos)
+            com.example.ai.PerfMeter.frameDrawn()
         }
     }
 
@@ -509,6 +514,7 @@ class MochiSceneRenderer(
         if (running) return
         running = true
         lastFrameNanos = 0L
+        lastDrawNanos = 0L
         Choreographer.getInstance().postFrameCallback(frameCallback)
     }
 
@@ -551,6 +557,8 @@ class MochiSceneRenderer(
 
     companion object {
         private const val TAG = "Mochi3D"
+        /** Just under 1/30 s, so a 60, 90 or 120 Hz screen still lands on 30 frames a second. */
+        private const val MIN_FRAME_NANOS = 31_000_000L
         @Volatile private var nativeReady = false
 
         private fun ensureNativeLibs() {
