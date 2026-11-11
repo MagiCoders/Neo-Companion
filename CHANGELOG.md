@@ -2,6 +2,16 @@
 
 Every update gets a new version. Check yours in **Settings** (bottom of the screen): `MochiLife <version> (build <code>)`.
 
+## 2.5 (build 16)
+Fixes from the first S22+ voice log of 2.4.
+- She listens at once after her name: a short chime, then the mic is open in a fraction of a second. The spoken greeting is gone (it took 3–6 s to prepare, so the start of your request was lost and the AI then "heard no request").
+- No more spoken "Let me check." while she thinks. It cost a second voice request, and the mic reopened after it while the real answer was still coming, so she recorded herself and looped. The mic now never reopens while an answer is pending.
+- The AI no longer throws away clear speech as "other people": the mic was opened for her, so any words it can make out are transcribed and answered. It is told which language you most likely speak now, to judge the language by sound, and never to translate.
+- Wake listener really rests now. On the S22+ it was decoding 95% of the time, because steady room noise kept its sound gate open. The gate now closes after 6 s at most and learns that level as the room's noise.
+- No false "stuck in Ready" watchdog line while the wake model is still loading.
+- Better voice log: seconds from her name to the mic opening, seconds from the end of your speech to the start of her answer, what the AI says an empty recording contained, and 25 lines instead of 12.
+- "Play what she heard" in Diagnostics plays back the last recording sent to the AI (kept on the phone only, replaced every turn), so you can hear whether it was cut off, too quiet, or her own voice.
+
 ## 2.4 (build 15)
 Fixes for heavy CPU use and the false "another app is using the mic" pause.
 - Mic check rebuilt. She no longer counts recorders (that counted her own recorders and always-on helpers such as "Hey Google" and Bixby). She steps back only when Android reports that it silenced her recorder for another app, or a call is in progress, and only after it has held for one second. When silenced, the wake listener stays open so she resumes the moment the mic is hers. The voice log says which signal caused a pause.

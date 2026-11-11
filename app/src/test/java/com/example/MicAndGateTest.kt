@@ -74,6 +74,20 @@ class MicAndGateTest {
     }
 
     @Test
+    fun `noise that starts after a quiet moment is learned instead of decoded forever`() {
+        // What happened on the S22+: the room measured quiet at first, then steady noise kept the
+        // gate open 95% of the time. Now the gate closes after its limit and learns the level.
+        val g = SoundGate()
+        repeat(10) { g.decide(40.0) }
+        repeat(600) { g.decide(180.0 + (it % 3) * 10) } // a minute of steady noise
+        assertTrue("decoded share ${g.decodedShare()}", g.decodedShare() < 0.2)
+        // A voice clearly above that noise still opens it.
+        var opened = false
+        repeat(5) { if (g.decide(900.0) == Decision.OPEN) opened = true }
+        assertTrue(opened)
+    }
+
+    @Test
     fun `soft but clear speech still opens the gate`() {
         val g = SoundGate()
         repeat(30) { g.decide(35.0) }

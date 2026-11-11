@@ -528,12 +528,13 @@ class CadenceViewModel(
             if (_settings.value.liveVoiceChat) {
                 if (!liveConversation.isActive()) toggleLiveConversation()
             } else {
-                // Answer straight away ("Yes? I'm listening."), then keep the conversation going:
-                // the mic reopens after every reply until the user says bye or goes quiet.
+                // Listen at once: a short chime, then the mic is open within a fraction of a second.
+                // (A spoken greeting took 3–6 s, so the start of the request was lost.) The mic
+                // reopens after every reply until the user says bye or goes quiet.
                 voiceCommandService.startConversation()
-                val tts = speechEngine
-                if (tts != null) characterController.speakWithLipSync(appContext, tts, wakeGreeting(), _selectedCharacter.value)
-                else voiceCommandService.triggerManualMicSession(hasRecordPermission = true)
+                com.example.ai.Earcon.listening()
+                characterController.transitionTo(CharacterRuntimeState.Listening)
+                voiceCommandService.startPersistentListeningLoop(forceImmediateCommandCapture = true)
             }
         }
     }
@@ -1075,11 +1076,6 @@ class CadenceViewModel(
         viewModelScope.launch {
             _isCompanionThinking.value = true
             characterController.transitionTo(CharacterRuntimeState.Thinking)
-            // Spoken turns: if the answer takes a moment, say so instead of leaving silence.
-            val fillerJob = if (fromVoice && localTurn == null) launch {
-                kotlinx.coroutines.delay(FILLER_AFTER_MS)
-                characterController.speakWithLipSync(context, tts, thinkingFiller(), activeChar)
-            } else null
             try {
                 // The energy check and the AI call run at the same time; the answer is only used
                 // if the check passes. Offline/Firestore hiccups must not block chatting.
@@ -1102,7 +1098,6 @@ class CadenceViewModel(
                         )
                     )
                 }
-                fillerJob?.cancel()
                 if (!creditCheck.await()) {
                     reportOutcome(context, tts, ActionOutcome.Failed("You've used today's AI energy. It refills tomorrow, or you can go Pro in Wallet."))
                     characterController.transitionTo(CharacterRuntimeState.Idle)
@@ -1123,7 +1118,6 @@ class CadenceViewModel(
                 android.util.Log.w("CadenceViewModel", "Message handling failed: ${e.javaClass.simpleName}")
                 reportOutcome(context, tts, ActionOutcome.Failed("Something went wrong on my side. Please try again."))
             } finally {
-                fillerJob?.cancel()
                 _isCompanionThinking.value = false
                 voiceCommandService.clearAwaitingReply()
             }
@@ -1232,10 +1226,6 @@ class CadenceViewModel(
         viewModelScope.launch {
             _isCompanionThinking.value = true
             characterController.transitionTo(CharacterRuntimeState.Thinking)
-            val fillerJob = launch {
-                kotlinx.coroutines.delay(FILLER_AFTER_MS)
-                characterController.speakWithLipSync(context, tts, thinkingFiller(), activeChar)
-            }
             try {
                 val creditCheck = async {
                     uid == null || _userProfile.value.userId != uid ||
@@ -1250,7 +1240,6 @@ class CadenceViewModel(
                         preferredLanguage = com.example.ai.VoiceLanguages.promptName(com.example.ai.VoiceLanguages.tagFor(_settings.value.preferredLanguage))
                     )
                 }
-                fillerJob.cancel()
                 if (!creditCheck.await()) {
                     reportOutcome(context, tts, ActionOutcome.Failed("You've used today's AI energy. It refills tomorrow, or you can go Pro in Wallet."))
                     characterController.transitionTo(CharacterRuntimeState.Idle)
@@ -1302,7 +1291,6 @@ class CadenceViewModel(
                 android.util.Log.w("CadenceViewModel", "Audio turn failed: ${e.javaClass.simpleName}")
                 reportOutcome(context, tts, ActionOutcome.Failed("Something went wrong on my side. Please try again."))
             } finally {
-                fillerJob.cancel()
                 _isCompanionThinking.value = false
                 voiceCommandService.clearAwaitingReply()
             }
@@ -1313,18 +1301,6 @@ class CadenceViewModel(
     @Volatile var speechEngine: TextToSpeech? = null
 
     /** A short spoken answer to the wake phrase, in the user's voice language. */
-    private fun wakeGreeting(): String {
-        val tag = com.example.ai.VoiceLanguages.tagFor(_settings.value.preferredLanguage).substringBefore('-')
-        val options = WAKE_GREETINGS[tag] ?: WAKE_GREETINGS.getValue("en")
-        return options.random()
-    }
-
-    /** A short "let me check" in the user's voice language. */
-    private fun thinkingFiller(): String {
-        val tag = com.example.ai.VoiceLanguages.tagFor(_settings.value.preferredLanguage).substringBefore('-')
-        return THINKING_FILLERS[tag] ?: THINKING_FILLERS.getValue("en")
-    }
-
     fun readMealStepsOutLoud(context: Context, tts: TextToSpeech?, meal: MealCreation?) {
         val targetMeal = meal ?: _meals.value.firstOrNull() ?: return
         val spoken = "Here are the quick steps for ${targetMeal.title}. ${targetMeal.stepsSummary.replace("\n", " ")}"
@@ -1486,44 +1462,7 @@ class CadenceViewModel(
             CompanionActionType.WHATSAPP_VIDEO_CALL,
             CompanionActionType.YOUTUBE, CompanionActionType.OPEN_MEDIA, CompanionActionType.WHATSAPP_PLAY_VOICE
         )
-        private val WAKE_GREETINGS = mapOf(
-            "en" to listOf("Yes? I'm listening.", "Hi! I'm here.", "Hey! What's up?"),
-            "ar" to listOf("نعم؟ أنا أسمعك.", "هلا! تفضل.", "أهلين، شلون أكدر أساعدك؟"),
-            "fa" to listOf("بله؟ گوش می‌دم.", "سلام! در خدمتم."),
-            "fr" to listOf("Oui ? Je t'écoute."),
-            "es" to listOf("¿Sí? Te escucho."),
-            "de" to listOf("Ja? Ich höre."),
-            "it" to listOf("Sì? Ti ascolto."),
-            "pt" to listOf("Sim? Estou ouvindo."),
-            "tr" to listOf("Efendim? Dinliyorum."),
-            "ru" to listOf("Да? Слушаю."),
-            "ja" to listOf("はい、聞いてますよ。"),
-            "ko" to listOf("네? 듣고 있어요."),
-            "zh" to listOf("在呢，你说。"),
-            "hi" to listOf("हाँ? सुन रही हूँ।"),
-            "ur" to listOf("جی؟ سن رہی ہوں۔"),
-            "id" to listOf("Ya? Aku dengar.")
-        )
         /** Say a filler if the AI hasn't answered a spoken turn after this long. */
-        private const val FILLER_AFTER_MS = 1_800L
-        private val THINKING_FILLERS = mapOf(
-            "en" to "Let me check.",
-            "ar" to "لحظة، دعني أتحقق.",
-            "fa" to "یک لحظه، بذار ببینم.",
-            "fr" to "Je regarde.",
-            "es" to "Déjame ver.",
-            "de" to "Moment, ich schaue nach.",
-            "it" to "Fammi controllare.",
-            "pt" to "Deixa eu ver.",
-            "tr" to "Bir bakayım.",
-            "ru" to "Сейчас посмотрю.",
-            "ja" to "ちょっと確認しますね。",
-            "ko" to "잠깐 확인해 볼게요.",
-            "zh" to "我看一下。",
-            "hi" to "एक सेकंड, देखती हूँ।",
-            "ur" to "ایک لمحہ، دیکھتی ہوں۔",
-            "id" to "Sebentar, aku cek dulu."
-        )
         private val STOP_WORDS = Regex("(?i)^(stop|cancel|never ?mind|undo|توقف|الغاء|إلغاء|بس|لغو|annule|para|stopp)[.!]?$")
 
         fun provideFactory(context: Context): ViewModelProvider.Factory =

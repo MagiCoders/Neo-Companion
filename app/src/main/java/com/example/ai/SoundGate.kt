@@ -12,7 +12,9 @@ class SoundGate(
     private val openRatio: Double = 2.5,
     private val minOpenRms: Double = 120.0,
     private val closeAfterQuietBlocks: Int = 12,
-    val preRollBlocks: Int = 3
+    val preRollBlocks: Int = 3,
+    /** Longest the gate stays open in one go (blocks). A wake phrase is under 2 s; 6 s is generous. */
+    private val maxOpenBlocks: Int = 60
 ) {
     enum class Decision {
         /** Quiet: skip decoding (the block is kept as lead-in). */
@@ -28,6 +30,8 @@ class SoundGate(
     private var floor = -1.0
     private var open = false
     private var quietRun = 0
+    private var openRun = 0
+    private var openLevel = 0.0
 
     var blocksSeen = 0L
         private set
@@ -48,14 +52,26 @@ class SoundGate(
             if (!loud) return Decision.SKIP
             open = true
             quietRun = 0
+            openRun = 0
+            openLevel = rms
             blocksDecoded += 1 + preRollBlocks
             return Decision.OPEN
         }
         blocksDecoded++
+        openRun++
+        openLevel = openLevel * 0.9 + rms * 0.1
         quietRun = if (rms > threshold * 0.6) 0 else quietRun + 1
         if (quietRun >= closeAfterQuietBlocks) {
             open = false
             quietRun = 0
+            return Decision.CLOSE
+        }
+        if (openRun >= maxOpenBlocks) {
+            // Sound that never stops (a fan, traffic, a TV) is the room, not a wake phrase: learn
+            // it as the new floor, so only something clearly louder opens the gate again.
+            open = false
+            quietRun = 0
+            floor = maxOf(floor, openLevel)
             return Decision.CLOSE
         }
         return Decision.FEED

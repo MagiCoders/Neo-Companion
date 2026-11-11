@@ -3061,8 +3061,24 @@ private fun DiagnosticsCard(p: SuitePalette) {
             Text("Nothing heard yet. Talk to your companion, then come back to see what she heard and why she reacted.", style = MochiType.Label, color = p.textTertiary)
         } else {
             val timeFormat = remember { java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.ROOT) }
-            voiceLog.takeLast(12).forEach { e ->
+            voiceLog.takeLast(25).forEach { e ->
                 Text("${timeFormat.format(java.util.Date(e.atMillis))}  ${e.kind.name.lowercase()}  ${e.text}", style = MochiType.Label, color = p.textTertiary)
+            }
+            val heardFile = remember { com.example.ai.VoiceCommandService.lastHeardFile(context) }
+            var playing by remember { mutableStateOf(false) }
+            DiagnosticsButton(if (playing) "Playing…" else "Play what she heard", p) {
+                if (!playing && heardFile.exists()) {
+                    runCatching {
+                        android.media.MediaPlayer().apply {
+                            setDataSource(heardFile.absolutePath)
+                            setOnCompletionListener { it.release(); playing = false }
+                            setOnErrorListener { mp, _, _ -> mp.release(); playing = false; true }
+                            prepare()
+                            start()
+                        }
+                        playing = true
+                    }
+                }
             }
             DiagnosticsButton(if (copiedLog) "Copied" else "Copy voice log", p) {
                 clipboard.setText(androidx.compose.ui.text.AnnotatedString(

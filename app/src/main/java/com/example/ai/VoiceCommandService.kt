@@ -65,6 +65,9 @@ class VoiceCommandService(
     private val scope: CoroutineScope
 ) {
     companion object {
+        /** The last recording sent to the AI (overwritten each turn, never uploaded anywhere else). */
+        fun lastHeardFile(context: Context): java.io.File = java.io.File(context.cacheDir, "last_heard.wav")
+
         private const val TAG = "VoiceCommandService"
         private val WAKE_WORD_REGEX = Regex(
             "(?i)\\b(hi|hey|hello|okay|ok)\\s+(mochi|mochie|mochy|elena|kaito|marco)\\b[,.!?\\s]*"
@@ -307,7 +310,7 @@ class VoiceCommandService(
             )
         )
         if (p != _phase.value) { _phase.value = p; phaseSince = now }
-        val fix = watchdog.check(p, wantsWakeSession(), now - phaseSince)
+        val fix = watchdog.check(p, wantsWakeSession() && !wakeEngine.isLoading && !wakeLoopSuspended, now - phaseSince)
         if (fix == Recovery.NONE) return
         VoiceLog.add(VoiceLog.Kind.ERROR, "Watchdog: stuck in \"${p.label}\" for ${(now - phaseSince) / 1000}s, resetting ($fix)")
         phaseSince = now
@@ -575,6 +578,10 @@ class VoiceCommandService(
         runOnMain {
             if (assistantSpeaking == speaking) return@runOnMain
             assistantSpeaking = speaking
+            if (speaking && speechEndAt > 0) {
+                VoiceLog.add(VoiceLog.Kind.SPOKE, "She started answering %.1f s after you finished speaking".format((System.currentTimeMillis() - speechEndAt) / 1000.0))
+                speechEndAt = 0L
+            }
             if (speaking) {
                 awaitingReply = false
                 awaitReplyJob?.cancel()
@@ -588,7 +595,7 @@ class VoiceCommandService(
                 restartListeningJob?.cancel()
                 restartListeningJob = scope.launch(Dispatchers.Main) {
                     delay(FOLLOW_UP_DELAY_MS)
-                    if (!assistantSpeaking && sessionKind != SessionKind.COMMAND) startSession(SessionKind.COMMAND)
+                    if (!assistantSpeaking && !awaitingReply && sessionKind != SessionKind.COMMAND) startSession(SessionKind.COMMAND)
                 }
             } else {
                 // Give the speaker a moment to go quiet before the mic opens again.
@@ -698,6 +705,7 @@ class VoiceCommandService(
                     bargeIn("Interrupted her with the wake phrase")
                 } else {
                     VoiceLog.add(VoiceLog.Kind.WAKE, "Wake phrase heard")
+                    wakeAt = System.currentTimeMillis()
                 }
                 // Open a live call if the user chose that, else take one spoken request.
                 onWakeWordOnly?.invoke() ?: startSession(SessionKind.COMMAND)
@@ -762,12 +770,18 @@ class VoiceCommandService(
         _isWakeLoopRunning.value = false
         _livePartialTranscript.value = ""
         c.start()
-        VoiceLog.add(VoiceLog.Kind.HEARD, "Mic open, the AI is listening (any language)")
+        val sinceWake = System.currentTimeMillis() - wakeAt
+        VoiceLog.add(VoiceLog.Kind.HEARD, "Mic open, the AI is listening" + if (wakeAt > 0 && sinceWake < 15_000) " (%.1f s after her name)".format(sinceWake / 1000.0) else "")
+        wakeAt = 0L
     }
 
     private fun deliverAudio(wav: ByteArray) {
         val callback = onAudioCallback ?: return
-        VoiceLog.add(VoiceLog.Kind.HEARD, "Sent %.1f s of speech to the AI".format((wav.size - 44) / 32_000.0))
+        lastUtteranceSec = (wav.size - 44) / 32_000.0
+        speechEndAt = System.currentTimeMillis()
+        VoiceLog.add(VoiceLog.Kind.HEARD, "Sent %.1f s of sound to the AI".format(lastUtteranceSec))
+        // Kept on the phone only, replaced every turn: Diagnostics can play back what she heard.
+        scope.launch(Dispatchers.IO) { runCatching { lastHeardFile(appContext).writeBytes(wav) } }
         awaitingReply = true
         awaitReplyJob?.cancel()
         awaitReplyJob = scope.launch(Dispatchers.Main) {
@@ -788,10 +802,17 @@ class VoiceCommandService(
         }
     }
 
-    /** The AI found no clear speech for her in the recording (noise, other people): listen again quietly. */
+    private var lastUtteranceSec = 0.0
+    private var speechEndAt = 0L
+    private var wakeAt = 0L
+
+    /** The AI could make out no words in the recording: listen again quietly. */
     fun onNothingForMe() {
         runOnMain {
-            VoiceLog.add(VoiceLog.Kind.IGNORED, "The AI heard no request (noise or other people)")
+            val note = brain.lastHeardNote
+            VoiceLog.add(VoiceLog.Kind.IGNORED, "The AI found no words in %.1f s of sound".format(lastUtteranceSec) +
+                (if (note.isNotBlank()) " (it heard: $note)" else "") + ". Play it back in Diagnostics → \"Play what she heard\".")
+            speechEndAt = 0L
             awaitReplyJob?.cancel()
             awaitingReply = false
             handleQuietTurn(notUnderstood = true, silent = true)

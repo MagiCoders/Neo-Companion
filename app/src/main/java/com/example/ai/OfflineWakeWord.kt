@@ -201,6 +201,7 @@ class OfflineWakeWord(context: Context) {
     private val io = Executors.newSingleThreadExecutor()
     private var model: Model? = null
     private var loading = false
+    val isLoading: Boolean get() = loading
     @Volatile private var session: Session? = null
 
     val isReady: Boolean get() = model != null
