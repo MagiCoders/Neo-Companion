@@ -139,6 +139,7 @@ enum class MochiScreenRoute(val hashRoute: String) {
     HELP_FEEDBACK(MochiHashRoutes.HELP),
     WHEN_BUSY(MochiHashRoutes.BUSY),
     DRIVING_MODE(MochiHashRoutes.DRIVING),
+    GEMMA_LAB(MochiHashRoutes.GEMMA_LAB),
     PANTRY(MochiHashRoutes.PANTRY),
     QUESTS(MochiHashRoutes.QUESTS)
 }
@@ -774,6 +775,7 @@ fun MochiAppHost(
                             onOpenCharacterPicker = { viewModel.navigateHash(MochiHashRoutes.CHARACTER_PICKER) },
                             onOpenWhenBusy = { viewModel.navigateHash(MochiHashRoutes.BUSY) },
                             onOpenDrivingMode = { viewModel.navigateHash(MochiHashRoutes.DRIVING) },
+                            onOpenGemmaLab = { viewModel.navigateHash(MochiHashRoutes.GEMMA_LAB) },
                             onOpenPermissions = { viewModel.navigateHash(MochiHashRoutes.PERMISSIONS) },
                             onOpenPrivacyData = { viewModel.navigateHash(MochiHashRoutes.PRIVACY) },
                             onOpenHelpFeedback = { viewModel.navigateHash(MochiHashRoutes.HELP) },
@@ -834,6 +836,10 @@ fun MochiAppHost(
                             onUpdateSettings = viewModel::updateSettings,
                             onBack = { viewModel.navigateHash(MochiHashRoutes.PROFILE) }
                         )
+                    }
+
+                    MochiHashRoutes.GEMMA_LAB -> {
+                        com.example.ui.screens.GemmaLabScreen(onBack = { viewModel.navigateHash(MochiHashRoutes.PROFILE) })
                     }
 
                     MochiHashRoutes.DRIVING -> {

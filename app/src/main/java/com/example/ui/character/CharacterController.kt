@@ -323,6 +323,7 @@ class CharacterController(
                 // Natural AI voice first (accents, dialects); the phone's voice if it isn't available.
                 com.example.ai.NaturalVoice.init(context.applicationContext)
                 if (playNatural(com.example.ai.NaturalVoice.speak(cleanText, locale.toLanguageTag(), character))) return@launch
+                if (com.example.ai.NaturalVoice.enabled) com.example.ai.VoiceLog.add(com.example.ai.VoiceLog.Kind.SPOKE, "Using the phone's voice for this reply (natural voice not ready in time)")
                 if (tts != null) {
                     try {
                         com.example.ai.OmnichannelMediaBridge.configureHumanLikeNeuralVoice(tts, character, locale)

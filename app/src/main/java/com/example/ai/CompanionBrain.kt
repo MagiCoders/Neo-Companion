@@ -13,6 +13,8 @@ import com.google.firebase.ai.type.Schema
 import com.google.firebase.ai.type.content
 import com.google.firebase.ai.type.generationConfig
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
@@ -85,6 +87,12 @@ class CompanionBrain {
     /** One model per (name, thinking level), created on first use. */
     private val models = java.util.concurrent.ConcurrentHashMap<Pair<String, ThinkingRouter.Level>, com.google.firebase.ai.GenerativeModel>()
 
+    /**
+     * Spoken quick turns use the smallest thinking setting ("minimal"): thinking is what made a
+     * one-line answer take 10–30 s at times. If the model refuses that setting it falls back to low.
+     */
+    @Volatile private var minimalThinkingRefused = false
+
     private fun modelFor(name: String, level: ThinkingRouter.Level) = models.getOrPut(name to level) {
         Firebase.ai(backend = GenerativeBackend.googleAI()).generativeModel(
             modelName = name,
@@ -94,7 +102,9 @@ class CompanionBrain {
                 responseSchema = schema
                 thinkingConfig = com.google.firebase.ai.type.thinkingConfig {
                     thinkingLevel = when (level) {
-                        ThinkingRouter.Level.LOW -> com.google.firebase.ai.type.ThinkingLevel.LOW
+                        ThinkingRouter.Level.LOW ->
+                            if (name == AiModels.CHAT_FAST && !minimalThinkingRefused) com.google.firebase.ai.type.ThinkingLevel.MINIMAL
+                            else com.google.firebase.ai.type.ThinkingLevel.LOW
                         ThinkingRouter.Level.MEDIUM -> com.google.firebase.ai.type.ThinkingLevel.MEDIUM
                         ThinkingRouter.Level.HIGH -> com.google.firebase.ai.type.ThinkingLevel.HIGH
                     }
@@ -180,30 +190,7 @@ class CompanionBrain {
         // (or can't serve the request) the other answers instead.
         val order = if (level == ThinkingRouter.Level.HIGH) listOf(AiModels.CHAT, AiModels.CHAT_FAST)
         else listOf(AiModels.CHAT_FAST, AiModels.CHAT)
-        var raw: String? = null
-        var lastError: Exception? = null
-        for (name in order) {
-            val startedAt = System.currentTimeMillis()
-            try {
-                raw = withTimeout(30_000L) { modelFor(name, level).generateContent(request).text }
-                VoiceLog.add(VoiceLog.Kind.AI, "Answered in %.1f s (%s, thinking %s)".format(
-                    (System.currentTimeMillis() - startedAt) / 1000.0, name, level.name.lowercase()))
-                break
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException && e !is kotlinx.coroutines.TimeoutCancellationException) throw e
-                lastError = e
-                val reason = AiDiagnostics.classify(e)
-                VoiceLog.add(VoiceLog.Kind.ERROR, "%s failed after %.1f s: %s".format(
-                    name, (System.currentTimeMillis() - startedAt) / 1000.0, e.javaClass.simpleName))
-                Log.w(TAG, "AI request failed on $name: ${e.javaClass.simpleName}")
-                // Problems the other model can't fix either (no internet, app not approved…): stop here.
-                if (reason in NO_FALLBACK) break
-            }
-        }
-        if (raw == null) {
-            lastError?.let { throw AiUnavailableException(AiDiagnostics.report(it), it) }
-            throw AiUnavailableException("I didn't get an answer. Please try again.")
-        }
+        val raw = hedgedAnswer(order, level, request)
 
         val json = try {
             JSONObject(raw!!)
@@ -244,6 +231,94 @@ class CompanionBrain {
             suggestedQuestCategory = QuestCategory.DAY
         )
     }
+
+    /**
+     * Asks [order]'s first model. The AI service sometimes holds one request for 10–30 s while the
+     * same request sent again answers in 2 s, so a slow request is not just waited for: after
+     * [hedgeAfterMs] the same request goes out a second time and whichever answers first wins (the
+     * other is cancelled). A model that is out of quota or unavailable hands over to the other one
+     * at once. Nothing waits longer than [deadlineMs]. Each try is written to the voice log.
+     */
+    private suspend fun hedgedAnswer(order: List<String>, level: ThinkingRouter.Level, request: com.google.firebase.ai.type.Content): String {
+        val hedgeAfterMs = if (level == ThinkingRouter.Level.HIGH) 10_000L else 4_000L
+        val deadlineMs = if (level == ThinkingRouter.Level.HIGH) 28_000L else 15_000L
+        val lock = Any()
+        var running = 0
+        var lastError: Exception? = null
+        val tried = mutableSetOf<String>()
+        val started = System.currentTimeMillis()
+        return try {
+            withTimeout(deadlineMs) {
+                kotlinx.coroutines.coroutineScope {
+                    val winner = kotlinx.coroutines.CompletableDeferred<String>()
+                    lateinit var attempt: (String, String) -> Unit
+                    attempt = { name, label ->
+                        synchronized(lock) { running++; tried += name }
+                        launch {
+                            val t0 = System.currentTimeMillis()
+                            try {
+                                val text = modelFor(name, level).generateContent(request).text
+                                    ?: throw IllegalStateException("empty answer")
+                                VoiceLog.add(VoiceLog.Kind.AI, "Answered in %.1f s (%s%s, thinking %s)".format(
+                                    (System.currentTimeMillis() - started) / 1000.0, name, label, thinkingLabel(name, level)))
+                                winner.complete(text)
+                            } catch (e: Exception) {
+                                if (e is kotlinx.coroutines.CancellationException) throw e
+                                val reason = AiDiagnostics.classify(e)
+                                VoiceLog.add(VoiceLog.Kind.ERROR, "%s%s failed after %.1f s: %s".format(
+                                    name, label, (System.currentTimeMillis() - t0) / 1000.0, e.javaClass.simpleName))
+                                Log.w(TAG, "AI request failed on $name: ${e.javaClass.simpleName}")
+                                val refusedMinimal = level == ThinkingRouter.Level.LOW && name == AiModels.CHAT_FAST &&
+                                    !minimalThinkingRefused && (e.message ?: "").contains("thinking", ignoreCase = true)
+                                val next: Pair<String, String>? = synchronized(lock) {
+                                    running--
+                                    lastError = e
+                                    when {
+                                        refusedMinimal -> {
+                                            minimalThinkingRefused = true
+                                            models.remove(name to level)
+                                            name to " (low thinking)"
+                                        }
+                                        reason !in NO_FALLBACK -> order.firstOrNull { it !in tried }?.let { it to " (other model)" }
+                                        else -> null
+                                    }
+                                }
+                                when {
+                                    next != null -> attempt(next.first, next.second)
+                                    synchronized(lock) { running == 0 } -> winner.completeExceptionally(e)
+                                }
+                            }
+                        }
+                    }
+                    attempt(order.first(), "")
+                    val hedge = launch {
+                        delay(hedgeAfterMs)
+                        if (!winner.isCompleted) {
+                            VoiceLog.add(VoiceLog.Kind.AI, "No answer after %.0f s: asking again in parallel".format(hedgeAfterMs / 1000.0))
+                            attempt(order.first(), " (second try)")
+                        }
+                    }
+                    try {
+                        winner.await()
+                    } finally {
+                        hedge.cancel()
+                        coroutineContext[kotlinx.coroutines.Job]?.children?.forEach { it.cancel() }
+                    }
+                }
+            }
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            VoiceLog.add(VoiceLog.Kind.ERROR, "No answer within %.0f s from the AI service".format(deadlineMs / 1000.0))
+            throw AiUnavailableException("The AI service is very slow right now. Please try again in a moment.", e)
+        } catch (e: AiUnavailableException) {
+            throw e
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            throw AiUnavailableException(AiDiagnostics.report(lastError ?: e), lastError ?: e)
+        }
+    }
+
+    private fun thinkingLabel(name: String, level: ThinkingRouter.Level): String =
+        if (level == ThinkingRouter.Level.LOW && name == AiModels.CHAT_FAST && !minimalThinkingRefused) "minimal" else level.name.lowercase()
 
     companion object {
         /** Keeps replies in one consistent variety instead of a mix. */

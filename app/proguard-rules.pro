@@ -38,3 +38,7 @@
 -keep class * implements com.sun.jna.** { *; }
 -keep class org.vosk.** { *; }
 -dontwarn java.awt.**
+
+# LiteRT-LM (Gemma Lab): native code calls back into these classes by name.
+-keep class com.google.ai.edge.litertlm.** { *; }
+-dontwarn com.google.ai.edge.litertlm.**

@@ -57,6 +57,7 @@ object MochiHashRoutes {
     const val HELP = "#/profile/help"
     const val BUSY = "#/profile/busy"
     const val DRIVING = "#/driving"
+    const val GEMMA_LAB = "#/profile/gemma-lab"
     const val CHARACTER_PICKER = "#/character-picker"
     const val SINGLE_TOOL = "#/tools/single"
     const val TOOL_RESULT = "#/tools/result"

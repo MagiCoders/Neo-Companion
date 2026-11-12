@@ -76,14 +76,15 @@ object OmnichannelMediaBridge {
             }
 
             if (!availableVoices.isNullOrEmpty()) {
-                val wantsFemaleVoice = character.id == "elena"
+                // Same gender as her natural voice, so the voice never switches from female to male.
+                val wantsFemaleVoice = VoiceGender.isFemaleCharacter(character.id)
                 val bestVoice = availableVoices
                     // Only voices of the reply's language: an English voice reading Persian is gibberish.
                     .filter { v -> v.locale.language.equals(targetLang, ignoreCase = true) }
+                    .filterNot { v -> v.features?.contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) == true }
                     .maxByOrNull { v ->
                         var score = 0
                         val nameLower = v.name.lowercase()
-                        if (v.locale.language.equals(targetLang, ignoreCase = true)) score += 40
                         if (v.locale.country.equals(locale.country, ignoreCase = true)) score += 15
                         if (v.quality >= Voice.QUALITY_VERY_HIGH) score += 50
                         else if (v.quality >= Voice.QUALITY_HIGH) score += 35
@@ -93,17 +94,11 @@ object OmnichannelMediaBridge {
                         ) {
                             score += 45
                         }
-                        if (wantsFemaleVoice && (nameLower.contains("female") || nameLower.contains("f-") ||
-                                nameLower.contains("samantha") || nameLower.contains("victoria") ||
-                                nameLower.contains("en-us-x-sfg") || nameLower.contains("en-us-x-iob") ||
-                                nameLower.contains("en-us-x-tpf"))
-                        ) {
-                            score += 25
-                        }
-                        if (!wantsFemaleVoice && (nameLower.contains("male") || nameLower.contains("m-") ||
-                                nameLower.contains("en-us-x-iom") || nameLower.contains("en-us-x-tpd"))
-                        ) {
-                            score += 25
+                        // Gender outweighs everything else: a female companion never gets a male voice.
+                        when (VoiceGender.guess(v.name)) {
+                            null -> {}
+                            wantsFemaleVoice -> score += 200
+                            else -> score -= 200
                         }
                         if (v.latency <= Voice.LATENCY_LOW) score += 10
                         score

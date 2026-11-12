@@ -18,8 +18,8 @@ android {
     applicationId = "com.aistudio.cadence.mxkprz"
     minSdk = 24
     targetSdk = 36
-    versionCode = 18
-    versionName = "2.7"
+    versionCode = 19
+    versionName = "2.8"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -141,6 +141,8 @@ dependencies {
   // Uncomment ALL FOUR of the following dependencies together to use Firebase Auth and Google
   // Sign-In via Credential Manager:
   implementation(libs.firebase.auth)
+  // On-phone Gemma 4 (Gemma Lab). The model itself is downloaded by the user, never in the APK.
+  implementation(libs.litertlm.android)
   // Crash and error reports (user can switch off in Settings)
   implementation(libs.firebase.crashlytics)
   implementation(libs.androidx.credentials)
@@ -172,4 +174,12 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.tooling)
   // "ksp"(libs.androidx.room.compiler)
   // "ksp"(libs.moshi.kotlin.codegen)
+}
+
+// LiteRT-LM (Gemma Lab) is built with a newer Kotlin than this project; its API is plain and
+// reads correctly with the metadata version check relaxed.
+kotlin {
+  compilerOptions {
+    freeCompilerArgs.add("-Xskip-metadata-version-check")
+  }
 }

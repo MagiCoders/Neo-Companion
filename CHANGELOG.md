@@ -2,6 +2,14 @@
 
 Every update gets a new version. Check yours in **Settings** (bottom of the screen): `MochiLife <version> (build <code>)`.
 
+## 2.8 (build 19)
+Fixes from the 2.7 voice log, and Gemma Lab.
+- No more 30-second waits. The AI service sometimes held a request for 11–30 s while the same request sent again answered in 2 s. Now, if no answer has come after 4 s, the same request goes out a second time in parallel and the first answer wins; a model that is out of quota or unavailable hands over to the other model at once; nothing waits longer than 15 s (28 s for long tasks), and then she says plainly that the AI service is slow. Every try is in the voice log.
+- Spoken turns ask the AI to think as little as possible ("minimal"), which is what made some short answers slow; if the model refuses that setting it uses "low" instead.
+- Her voice no longer switches from female to male. When the natural voice is not ready in time the phone's voice takes over, and it was only set to female for Elena. Now the phone voice always matches her (female for Mochi and Elena, male for Kaito and Marco), using the gender codes in Samsung and Google voice names. The voice log says when the phone's voice was used.
+- Gemma Lab (Settings → Gemma Lab): download Gemma 4 E2B (2.6 GB) or E4B (3.7 GB) from Google's public model page, Wi-Fi only unless allowed, with pause and resume and a SHA-256 check against the published fingerprint before use; run it fully offline on CPU or GPU; chat by text or voice (English, Arabic, Persian); see load time, time to first word, tokens per second, memory and battery temperature; run a 16-request quality test in three languages. On an 8 GB phone such as the S22+, E2B fits and E4B is marked experimental.
+- The APK is about 22 MB larger (Gemma's engine). Models are never inside the APK.
+
 ## 2.7 (build 18)
 One microphone, no waiting (Phase "voice rebuild" of the Fix and Upgrade Plan).
 - One recorder stays open while voice is on, instead of a wake-word recorder and a request recorder that took turns. The wake detector, the request recorder and the talk-over detector all read the same microphone, so nothing you say falls into a gap. The last 8 seconds are kept in memory only (never stored or sent), so a request can start before she noticed it.

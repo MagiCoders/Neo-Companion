@@ -120,7 +120,7 @@ enum class MochiMainTab {
 }
 
 @Composable
-private fun rememberSuiteColors(): SuitePalette {
+internal fun rememberSuiteColors(): SuitePalette {
     val style = LocalVisualStyle.current
     val isLight = style.isLight
     return remember(isLight) {
@@ -150,7 +150,7 @@ private fun rememberSuiteColors(): SuitePalette {
     }
 }
 
-private data class SuitePalette(
+internal data class SuitePalette(
     val bg: Color,
     val card: Color,
     val textPrimary: Color,
@@ -517,6 +517,7 @@ fun ProfileAndSettingsScreen(
     onOpenCharacterPicker: () -> Unit,
     onOpenWhenBusy: () -> Unit,
     onOpenDrivingMode: () -> Unit,
+    onOpenGemmaLab: () -> Unit = {},
     onOpenPermissions: () -> Unit,
     onOpenPrivacyData: () -> Unit,
     onOpenHelpFeedback: () -> Unit,
@@ -849,6 +850,15 @@ fun ProfileAndSettingsScreen(
                 trailingText = if (settings.drivingAutoStart) "Automatic" else "Manual",
                 palette = p,
                 onClick = onOpenDrivingMode
+            )
+            HairlineDivider(p.hairline)
+            SettingsIconNavRow(
+                icon = Icons.Outlined.Language,
+                title = "Gemma Lab",
+                subtitle = "Test Gemma 4 offline on this phone",
+                trailingText = "Beta",
+                palette = p,
+                onClick = onOpenGemmaLab
             )
         }
 
@@ -2305,7 +2315,7 @@ private fun DrivingButton(label: String, bg: Color, fg: Color, onClick: () -> Un
 }
 
 @Composable
-private fun BackPillButton(palette: SuitePalette, onClick: () -> Unit) {
+internal fun BackPillButton(palette: SuitePalette, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .size(MochiSpacing.minTouchTarget)
