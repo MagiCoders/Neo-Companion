@@ -18,8 +18,8 @@ android {
     applicationId = "com.aistudio.cadence.mxkprz"
     minSdk = 24
     targetSdk = 36
-    versionCode = 21
-    versionName = "3.0"
+    versionCode = 22
+    versionName = "3.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -143,6 +143,11 @@ dependencies {
   implementation(libs.firebase.auth)
   // On-phone Gemma 4 (Gemma Lab). The model itself is downloaded by the user, never in the APK.
   implementation(libs.litertlm.android)
+  // Offline voice test (Gemma Lab): open speech models (Whisper listener, Piper voices), downloaded on request.
+  implementation(libs.sherpa.onnx)
+  // Reports whether Google's on-phone speech models exist on this phone (alpha; status check only).
+  implementation(libs.mlkit.genai.asr)
+  implementation(libs.mlkit.genai.tts)
   // Crash and error reports (user can switch off in Settings)
   implementation(libs.firebase.crashlytics)
   implementation(libs.androidx.credentials)

@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- Google's on-phone speech (ML Kit GenAI) is only asked for on Android 12+ (checked in code). -->
+    <uses-sdk tools:overrideLibrary="com.google.mlkit.genai.speechrecognition,com.google.mlkit.genai.texttospeech,com.google.mlkit.genai.common" />
+
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />

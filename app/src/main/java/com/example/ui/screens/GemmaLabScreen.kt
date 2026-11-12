@@ -190,7 +190,7 @@ fun GemmaLabScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                         Chip(name, voiceLang == tag, accent, p) { voiceLang = tag }
                     }
                 }
-                Text("Voice is turned into text by the phone first, then Gemma answers.", style = MochiType.Label, color = p.textTertiary)
+                Text(if (runner.hearsAudio) "This chip uses the phone's recogniser. In conversation, Gemma hears your voice directly." else "Voice is turned into text by the phone first, then Gemma answers.", style = MochiType.Label, color = p.textTertiary)
             }
 
             // ---- Quality test ----
@@ -233,6 +233,8 @@ fun GemmaLabScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 }
             }
         }
+        // ---- Offline voice (test) ----
+        OfflineVoiceCard(p, accent, allowMobile)
         Spacer(Modifier.padding(bottom = MochiSpacing.md))
     }
 }
@@ -289,7 +291,7 @@ private fun ModelCard(
 }
 
 @Composable
-private fun LabCard(p: SuitePalette, content: @Composable () -> Unit) {
+internal fun LabCard(p: SuitePalette, content: @Composable () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -302,7 +304,7 @@ private fun LabCard(p: SuitePalette, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun Chip(label: String, selected: Boolean, accent: Color, p: SuitePalette, onClick: () -> Unit) {
+internal fun Chip(label: String, selected: Boolean, accent: Color, p: SuitePalette, onClick: () -> Unit) {
     Text(
         text = label,
         style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold),

@@ -19,6 +19,12 @@ dependencyResolutionManagement {
   repositories {
     google()
     mavenCentral()
+    // sherpa-onnx (offline voice test) is only published on JitPack. Exclusive both ways: that
+    // group only from JitPack, and nothing else from JitPack.
+    exclusiveContent {
+      forRepository { maven("https://jitpack.io") }
+      filter { includeGroup("com.github.k2-fsa.sherpa-onnx") }
+    }
   }
 }
 

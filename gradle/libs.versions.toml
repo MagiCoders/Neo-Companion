@@ -39,6 +39,9 @@ firebaseBom = "34.17.0"
 secretsGradlePlugin = "2.0.1"
 googleServices = "4.5.0"
 litertlm = "0.18.0"
+sherpaOnnx = "v1.13.8"
+mlkitGenaiAsr = "1.0.0-alpha2"
+mlkitGenaiTts = "1.0.0-alpha1"
 firebaseCrashlyticsPlugin = "3.0.6"
 credentials = "1.5.0"
 googleid = "1.1.1"
@@ -97,6 +100,9 @@ firebase-ai = { group = "com.google.firebase", name = "firebase-ai" }
 firebase-appcheck-recaptcha = { group = "com.google.firebase", name = "firebase-appcheck-recaptcha" }
 firebase-appcheck-debug = { group = "com.google.firebase", name = "firebase-appcheck-debug" }
 firebase-firestore = { group = "com.google.firebase", name = "firebase-firestore" }
+sherpa-onnx = { group = "com.github.k2-fsa.sherpa-onnx", name = "sherpa-onnx", version.ref = "sherpaOnnx" }
+mlkit-genai-asr = { group = "com.google.mlkit", name = "genai-speech-recognition", version.ref = "mlkitGenaiAsr" }
+mlkit-genai-tts = { group = "com.google.mlkit", name = "genai-text-to-speech", version.ref = "mlkitGenaiTts" }
 litertlm-android = { group = "com.google.ai.edge.litertlm", name = "litertlm-android", version.ref = "litertlm" }
 firebase-crashlytics = { group = "com.google.firebase", name = "firebase-crashlytics" }
 firebase-auth = { group = "com.google.firebase", name = "firebase-auth" }

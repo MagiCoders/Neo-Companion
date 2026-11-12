@@ -230,6 +230,41 @@ class VoiceCommandService(
         audioManager.activeRecordingConfigurations.any { it.clientAudioSessionId !in mine && it.clientAudioSource != HOTWORD_SOURCE }
     } catch (_: Throwable) { false }
 
+    /**
+     * What Android reports at the moment she is silenced: every active recorder (hers or another
+     * app's, by audio source) and her app's priority. Written to the voice log so the cause is seen,
+     * not guessed.
+     */
+    private fun micDetails(mine: Set<Int>): String {
+        val recorders = if (Build.VERSION.SDK_INT >= 29) try {
+            audioManager.activeRecordingConfigurations.joinToString { c ->
+                val who = if (c.clientAudioSessionId in mine) "hers" else "other app"
+                "$who source ${sourceName(c.clientAudioSource)}" + if (c.isClientSilenced) " (silenced)" else ""
+            }
+        } catch (_: Throwable) { "unknown" } else "unknown"
+        val importance = try {
+            val info = android.app.ActivityManager.RunningAppProcessInfo()
+            android.app.ActivityManager.getMyMemoryState(info)
+            when (info.importance) {
+                android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND -> "on screen"
+                android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE -> "listening service"
+                android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE -> "visible"
+                else -> "background (${info.importance})"
+            }
+        } catch (_: Throwable) { "unknown" }
+        return "recorders: ${recorders.ifBlank { "none" }} · app priority: $importance · audio mode ${audioManager.mode}"
+    }
+
+    private fun sourceName(source: Int): String = when (source) {
+        android.media.MediaRecorder.AudioSource.MIC -> "mic"
+        android.media.MediaRecorder.AudioSource.VOICE_RECOGNITION -> "speech recognition"
+        android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION -> "voice call/chat"
+        android.media.MediaRecorder.AudioSource.CAMCORDER -> "camera"
+        android.media.MediaRecorder.AudioSource.UNPROCESSED -> "raw"
+        HOTWORD_SOURCE -> "hotword"
+        else -> source.toString()
+    }
+
     private fun ownSessionIds(): Set<Int> =
         setOf(hub.sessionId) - (-1)
 
@@ -262,6 +297,7 @@ class VoiceCommandService(
                 _pauseReason.value = reason
                 VoiceLog.add(VoiceLog.Kind.IGNORED, "Paused: $reason (her recorder ${mine.joinToString()} silenced; " +
                     (if (inApp) "app on screen" else if (backgroundListening) "listening service on" else "listening service off") + ")")
+                VoiceLog.add(VoiceLog.Kind.IGNORED, "Mic details: ${micDetails(mine)}")
                 endConversation("another app needs the mic")
                 if (sessionKind == SessionKind.COMMAND) cancelSession(destroy = false)
             }
@@ -454,8 +490,20 @@ class VoiceCommandService(
     /** Answers come from the phone (Gemma or on-phone commands): no cloud listening, no Live. */
     fun phoneOnlyNow(): Boolean = engineMode == "phone" || (engineMode == "auto" && !NetworkState.isOnline(appContext))
 
-    private fun useAiListening(): Boolean =
-        aiListening && onAudioCallback != null && System.currentTimeMillis() >= phoneRecognizerUntil && !phoneOnlyNow()
+    /**
+     * Her own microphone records the turn (no other app takes the mic): the cloud AI hears it, or
+     * in phone mode Gemma hears it. The phone's speech recogniser is only a fallback (quota out,
+     * or no on-phone model that can hear).
+     */
+    private fun useAiListening(): Boolean {
+        if (!aiListening || onAudioCallback == null) return false
+        return if (phoneOnlyNow()) com.example.ai.gemma.GemmaEngine.canHear(appContext)
+        else System.currentTimeMillis() >= phoneRecognizerUntil
+    }
+
+    /** Which brain answered the last spoken or typed turn: "Gemma" or "Cloud". */
+    @Volatile var lastEngine = ""
+        private set
 
     private val onExecutePendingActionCallback: ((PendingVoiceAction) -> Unit)?
         get() = pendingExecuteOverride ?: callbackStack.lastOrNull()?.second?.onExecutePending
@@ -1369,7 +1417,17 @@ class VoiceCommandService(
         userName: String,
         history: List<CompanionChatTurn>,
         preferredLanguage: String
-    ): Pair<String, CompanionChatTurn?> = brain.understandAudio(wav, companion, userName, history, preferredLanguage)
+    ): Pair<String, CompanionChatTurn?> {
+        if (phoneOnlyNow()) {
+            lastEngine = "Gemma"
+            return when (val r = com.example.ai.gemma.GemmaEngine.hear(appContext, wav, companion.displayName, preferredLanguage, history)) {
+                is com.example.ai.gemma.GemmaEngine.Heard.Turn -> r.heard to r.turn
+                is com.example.ai.gemma.GemmaEngine.Heard.Unavailable -> throw AiUnavailableException(r.reason)
+            }
+        }
+        lastEngine = "Cloud"
+        return brain.understandAudio(wav, companion, userName, history, preferredLanguage)
+    }
 
     suspend fun processNaturalLanguageCommand(
         commandText: String,
@@ -1390,6 +1448,14 @@ class VoiceCommandService(
             )
         }
         // Throws AiUnavailableException on failure; callers show an honest error.
+        if (phoneOnlyNow()) {
+            lastEngine = "Gemma"
+            return when (val r = com.example.ai.gemma.GemmaEngine.answer(appContext, trimmed, companion.displayName, preferredLanguage, history)) {
+                is com.example.ai.gemma.GemmaEngine.Result.Answer -> r.turn
+                is com.example.ai.gemma.GemmaEngine.Result.Unavailable -> throw AiUnavailableException(r.reason)
+            }
+        }
+        lastEngine = "Cloud"
         return brain.understand(trimmed, companion, userName, history, preferredLanguage)
     }
 

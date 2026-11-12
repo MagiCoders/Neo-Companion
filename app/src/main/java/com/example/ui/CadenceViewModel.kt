@@ -530,6 +530,11 @@ class CadenceViewModel(
 
     /** Opens a Live conversation on the shared microphone (after her name, or a tap). */
     private fun startLiveConversation(seedFrom: Long) {
+        if (voiceCommandService.phoneOnlyNow()) {
+            com.example.ai.VoiceLog.add(com.example.ai.VoiceLog.Kind.IGNORED, "Live not started: AI engine is on this phone")
+            voiceCommandService.triggerManualMicSession(true)
+            return
+        }
         voiceCommandService.liveStarting()
         val uid = _currentUserId.value
         viewModelScope.launch {
@@ -627,7 +632,9 @@ class CadenceViewModel(
 
     /** Mic button: one spoken turn by default; a live call when "Live voice chat" is on (or one is running). */
     fun onMicButton(hasRecordPermission: Boolean) {
-        if (liveConversation.isActive() || (_settings.value.liveMode && hasRecordPermission)) toggleLiveConversation()
+        // Live is a cloud conversation: never when the AI engine is "On this phone" (or offline).
+        if (liveConversation.isActive()) toggleLiveConversation()
+        else if (_settings.value.liveMode && hasRecordPermission && !voiceCommandService.phoneOnlyNow()) toggleLiveConversation()
         else voiceCommandService.triggerManualMicSession(hasRecordPermission)
     }
 
@@ -1353,7 +1360,7 @@ class CadenceViewModel(
                     characterController.transitionTo(CharacterRuntimeState.Listening)
                     return@launch
                 }
-                _lastEngine.value = "Cloud"
+                _lastEngine.value = voiceCommandService.lastEngine.ifBlank { "Cloud" }
                 val (heard, turn) = result.getOrElse { e ->
                     if (e is kotlinx.coroutines.CancellationException) throw e
                     if (com.example.ai.AiDiagnostics.classify(e.cause ?: e) == com.example.ai.AiDiagnostics.Reason.QUOTA) {

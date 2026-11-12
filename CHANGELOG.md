@@ -2,6 +2,14 @@
 
 Every update gets a new version. Check yours in **Settings** (bottom of the screen): `MochiLife <version> (build <code>)`.
 
+## 3.1 (build 22)
+"On this phone" really stays on the phone, Gemma hears you directly, the Gemma test works, and a timed offline-voice test.
+- "On this phone" never starts a Live (cloud) conversation any more. The mic button started Live whenever "Live conversation" was on, whatever the AI engine; it now checks the engine (and being offline) first.
+- In phone mode Gemma hears your recording itself (its audio part is loaded with the model) and writes down what you said, then answers. The phone's speech recogniser is no longer used for that. It had been taking her microphone after a tap or after her name, so Android silenced her own recorder ("Android paused her microphone" in the 3.0 log). If a model can't hear on a phone, it is loaded for text only and the recogniser is the fallback.
+- The 16-request quality test failed on every request because LiteRT-LM allows only one open conversation per loaded model and the Lab chat already had it open. The chat is now opened only when needed and closed before each test request or on-phone answer. The same clash made Gemma's own answers fail. Errors now show the library's message.
+- When Android silences her microphone, the voice log adds a "Mic details" line: every active recorder (hers or another app's, by type), her app's priority and the audio mode, so the cause can be seen.
+- Gemma Lab → Offline voice (test only): checks Google's on-phone speech for English and Arabic (listening and voices); downloads the open Whisper listener (base or small) and Piper voices (English, Arabic, Persian) with resume and fingerprint checks; and "Hold to talk" times a full offline turn: Whisper text → Gemma's first sentence (streamed) → Piper's first sound, plus Gemma hearing the same recording directly. The report can be copied. The Piper voices use espeak-ng (GPL), so this stays a test feature and is not part of a Play release as it is.
+
 ## 3.0 (build 21)
 Listening over other apps, Live ends when she hands over, and a choice of AI engine.
 - She keeps listening when another app is on screen. Android only lets a background app use the microphone through a visible "microphone" service started while the app was still on screen; Mochi's started only as she left, too late when she opened YouTube herself. Her listening service now starts while the app is on screen and keeps running ("Mochi is listening · Stop listening" notification); the floating bubble is only shown or hidden as you leave or return. If the microphone was refused earlier (permission granted later), opening the app asks again.

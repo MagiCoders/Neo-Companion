@@ -7,6 +7,7 @@ import android.os.BatteryManager
 import android.os.Debug
 import android.util.Log
 import com.google.ai.edge.litertlm.Backend
+import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.Conversation
 import com.google.ai.edge.litertlm.ConversationConfig
@@ -15,12 +16,13 @@ import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.SamplerConfig
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.Executors
@@ -73,16 +75,18 @@ class GemmaRunner(context: Context) {
         try {
             // Lets the library report its own speed figures (time to first word, words per second).
             runCatching { com.google.ai.edge.litertlm.ExperimentalFlags.enableBenchmark = true }
-            val e = Engine(
-                EngineConfig(
-                    modelPath = file.absolutePath,
-                    backend = if (processor == Processor.GPU) Backend.GPU() else Backend.CPU(),
-                    cacheDir = File(appContext.cacheDir, "gemma").apply { mkdirs() }.absolutePath
-                )
-            )
-            e.initialize()
+            // With its audio part switched on, Gemma can hear a recording directly (no speech
+            // recogniser needed). If this model or phone can't, load it for text only.
+            val e = try {
+                newEngine(file, processor, withAudio = true).also { hearsAudio = true }
+            } catch (t: Throwable) {
+                if (t is OutOfMemoryError) throw t
+                Log.w(TAG, "Audio part unavailable (${t.javaClass.simpleName}); loading for text only")
+                hearsAudio = false
+                newEngine(file, processor, withAudio = false)
+            }
             engine = e
-            chat = e.createConversation(chatConfig())
+            chat = null
             _state.value = State.Loaded(model, processor, (System.currentTimeMillis() - started) / 1000.0)
             _stats.value = Stats(memoryMb = memoryMb(), batteryTempC = batteryTemp())
         } catch (t: Throwable) {
@@ -99,29 +103,82 @@ class GemmaRunner(context: Context) {
         }
     }
 
+    /** True when the loaded model can hear recordings (its audio part loaded). */
+    @Volatile var hearsAudio = false
+        private set
+
+    private fun newEngine(file: File, processor: Processor, withAudio: Boolean): Engine {
+        val e = Engine(
+            EngineConfig(
+                modelPath = file.absolutePath,
+                backend = if (processor == Processor.GPU) Backend.GPU() else Backend.CPU(),
+                visionBackend = null,
+                audioBackend = if (withAudio) Backend.CPU() else null,
+                maxNumTokens = null,
+                maxNumImages = null,
+                cacheDir = File(appContext.cacheDir, "gemma").apply { mkdirs() }.absolutePath
+            )
+        )
+        try { e.initialize() } catch (t: Throwable) { try { e.close() } catch (_: Throwable) {}; throw t }
+        return e
+    }
+
+    /**
+     * The Lab chat. LiteRT-LM allows only one open conversation per loaded model, so the chat is
+     * opened when needed and closed whenever a test or an answer needs its own conversation.
+     */
+    private fun chatOrOpen(): Conversation =
+        chat ?: (engine ?: throw IllegalStateException("Load a model first.")).createConversation(chatConfig()).also { chat = it }
+
+    private fun closeChat() {
+        try { chat?.cancelProcess() } catch (_: Throwable) {}
+        try { chat?.close() } catch (_: Throwable) {}
+        chat = null
+    }
+
+    /** Runs [block] in its own fresh conversation (closing the chat first). Gemma thread only. */
+    private fun <T> oneOff(config: ConversationConfig, block: (Conversation) -> T): T {
+        val e = engine ?: throw IllegalStateException("Load a model first.")
+        closeChat()
+        val conv = e.createConversation(config)
+        try { return block(conv) } finally { try { conv.close() } catch (_: Throwable) {} }
+    }
+
     /** The reply as it is written, piece by piece. */
-    fun send(text: String): Flow<String> {
-        val c = chat ?: throw IllegalStateException("Load a model first.")
+    fun send(text: String): Flow<String> = flow {
+        val c = chatOrOpen()
         val started = System.currentTimeMillis()
         var first = 0L
         var pieces = 0
-        return c.sendMessageAsync(text)
-            .map { m ->
+        try {
+            emitAll(c.sendMessageAsync(text).map { m ->
                 if (first == 0L) first = System.currentTimeMillis()
                 pieces++
                 m.toString()
-            }
-            .onCompletion {
-                // Our own measurement (pieces are about one token each); the library's figures win when it has them.
-                val writing = (System.currentTimeMillis() - first).coerceAtLeast(1L) / 1000.0
-                measured = Stats(
-                    timeToFirstTokenSec = if (first > 0) (first - started) / 1000.0 else 0.0,
-                    decodeTokensPerSec = if (pieces > 1) (pieces - 1) / writing else 0.0
-                )
-                refreshStats(c)
-            }
-            .flowOn(dispatcher)
-    }
+            })
+        } finally {
+            // Our own measurement (pieces are about one token each); the library's figures win when it has them.
+            val writing = (System.currentTimeMillis() - first).coerceAtLeast(1L) / 1000.0
+            measured = Stats(
+                timeToFirstTokenSec = if (first > 0) (first - started) / 1000.0 else 0.0,
+                decodeTokensPerSec = if (pieces > 1) (pieces - 1) / writing else 0.0
+            )
+            refreshStats(c)
+        }
+    }.flowOn(dispatcher)
+
+    /**
+     * One answer streamed piece by piece in a fresh conversation (the offline voice test times the
+     * first sentence with it).
+     */
+    fun stream(systemPrompt: String, text: String): Flow<String> = flow {
+        val e = engine ?: throw IllegalStateException("Load a model first.")
+        closeChat()
+        val conv = e.createConversation(answerConfig(systemPrompt))
+        try {
+            emitAll(conv.sendMessageAsync(text).map { it.toString() })
+        } finally { try { conv.close() } catch (_: Throwable) {} }
+    }.flowOn(dispatcher)
 
     @Volatile private var measured = Stats()
 
@@ -129,50 +186,54 @@ class GemmaRunner(context: Context) {
     suspend fun stop() = withContext(dispatcher) { chat?.cancelProcess() }
 
     /** Clears the chat (new conversation, same loaded model). */
-    suspend fun newChat() = withContext(dispatcher) {
-        val e = engine ?: return@withContext
-        try { chat?.close() } catch (_: Throwable) {}
-        chat = e.createConversation(chatConfig())
-    }
+    suspend fun newChat() = withContext(dispatcher) { closeChat() }
 
     /**
      * Runs the quality test: each request in a fresh conversation, asked for a JSON answer.
      * [onEach] gets every result as it comes.
      */
     suspend fun runBench(onEach: (GemmaBench.Outcome) -> Unit) = withContext(dispatcher) {
-        val e = engine ?: throw IllegalStateException("Load a model first.")
+        if (engine == null) throw IllegalStateException("Load a model first.")
+        val config = ConversationConfig(
+            systemInstruction = Contents.of(GemmaBench.SYSTEM_PROMPT),
+            samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 0.0, seed = 1)
+        )
         for (case in GemmaBench.CASES) {
-            val conv = e.createConversation(
-                ConversationConfig(
-                    systemInstruction = Contents.of(GemmaBench.SYSTEM_PROMPT),
-                    samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 0.0, seed = 1)
-                )
-            )
             try {
-                val t0 = System.currentTimeMillis()
-                val answer = conv.sendMessage(case.text).toString()
-                val outcome = GemmaBench.score(case, answer, (System.currentTimeMillis() - t0) / 1000.0)
-                refreshStats(conv)
+                val outcome = oneOff(config) { conv ->
+                    val t0 = System.currentTimeMillis()
+                    val answer = conv.sendMessage(case.text).toString()
+                    refreshStats(conv)
+                    GemmaBench.score(case, answer, (System.currentTimeMillis() - t0) / 1000.0)
+                }
                 onEach(outcome)
             } catch (t: Throwable) {
-                onEach(GemmaBench.Outcome(case, "error: ${t.javaClass.simpleName}", null, null, false, 0.0))
-            } finally {
-                try { conv.close() } catch (_: Throwable) {}
+                Log.w(TAG, "Test request failed: ${t.javaClass.simpleName}: ${t.message}")
+                onEach(GemmaBench.Outcome(case, "error: ${t.javaClass.simpleName}: ${t.message?.take(120).orEmpty()}", null, null, false, 0.0))
             }
         }
     }
 
     /** One answer in a fresh conversation (the on-phone engine; the chat in the Lab is kept apart). */
     suspend fun answerOnce(systemPrompt: String, text: String): String = withContext(dispatcher) {
-        val e = engine ?: throw IllegalStateException("Load a model first.")
-        val conv = e.createConversation(
-            ConversationConfig(
-                systemInstruction = Contents.of(systemPrompt),
-                samplerConfig = SamplerConfig(topK = 20, topP = 0.9, temperature = 0.4, seed = 0)
-            )
-        )
-        try { conv.sendMessage(text).toString() } finally { try { conv.close() } catch (_: Throwable) {} }
+        oneOff(answerConfig(systemPrompt)) { it.sendMessage(text).toString() }
     }
+
+    /**
+     * Gemma listens to [wav] (a 16 kHz mono WAV recording) and answers [instruction] about it, in a
+     * fresh conversation. Needs [hearsAudio].
+     */
+    suspend fun answerAudio(systemPrompt: String, wav: ByteArray, instruction: String): String = withContext(dispatcher) {
+        if (!hearsAudio) throw IllegalStateException("This model was loaded without hearing.")
+        oneOff(answerConfig(systemPrompt)) { conv ->
+            conv.sendMessage(Contents.of(Content.AudioBytes(wav), Content.Text(instruction))).toString()
+        }
+    }
+
+    private fun answerConfig(systemPrompt: String) = ConversationConfig(
+        systemInstruction = Contents.of(systemPrompt),
+        samplerConfig = SamplerConfig(topK = 20, topP = 0.9, temperature = 0.4, seed = 0)
+    )
 
     suspend fun unload() = withContext(dispatcher) {
         closeAll()
@@ -200,9 +261,8 @@ class GemmaRunner(context: Context) {
     }
 
     private fun closeAll() {
-        try { chat?.cancelProcess() } catch (_: Throwable) {}
-        try { chat?.close() } catch (_: Throwable) {}
-        chat = null
+        closeChat()
+        hearsAudio = false
         try { engine?.close() } catch (_: Throwable) {}
         engine = null
     }
