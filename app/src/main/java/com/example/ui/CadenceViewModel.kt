@@ -185,15 +185,16 @@ class CadenceViewModel(
         return tag
     }
 
-    /** The language chip on the home screen: English → Arabic (your dialect) → Persian → English. */
-    fun cycleVoiceLanguage() {
+    private var lastLanguagePick = 0L
+
+    /** The language menu on the home screen ("en", "ar" keeps your dialect, "fa"). */
+    fun pickVoiceLanguage(code: String) {
+        val now = System.currentTimeMillis()
+        if (now - lastLanguagePick < 600L) return // a double tap is one choice
+        lastLanguagePick = now
         val current = com.example.ai.VoiceLanguages.tagFor(_settings.value.preferredLanguage).substringBefore('-')
-        val next = when (current) {
-            "en" -> "ar"
-            "ar" -> "fa-IR"
-            else -> "en-US"
-        }
-        switchVoiceLanguage(next)
+        if (current == code) return
+        switchVoiceLanguage(when (code) { "fa" -> "fa-IR"; "en" -> "en-US"; else -> code })
     }
 
     /** Short label for the chip. */
@@ -526,25 +527,21 @@ class CadenceViewModel(
             if (tts != null) characterController.speakWithLipSync(appContext, tts, idleLine(idle), _selectedCharacter.value)
             else if (idle != VoiceCommandService.Idle.GOODBYE) voiceCommandService.startPersistentListeningLoop(forceImmediateCommandCapture = true)
         }
-        // Wake phrase heard: take one spoken request (or open a live call if the user chose that).
-        voiceCommandService.onWakeWordOnly = {
-            if (_settings.value.liveVoiceChat) {
-                if (!liveConversation.isActive()) toggleLiveConversation()
-            } else {
-                // Listen at once: a short chime, then the mic is open within a fraction of a second.
-                // (A spoken greeting took 3–6 s, so the start of the request was lost.) The mic
-                // reopens after every reply until the user says bye or goes quiet.
-                voiceCommandService.startConversation()
-                val tts = speechEngine
-                val tag = java.util.Locale.forLanguageTag(com.example.ai.VoiceLanguages.tagFor(_settings.value.preferredLanguage)).toLanguageTag()
-                val greeting = WAKE_ANSWER[tag.substringBefore('-')]
-                if (tts != null && greeting != null && com.example.ai.NaturalVoice.isReady(greeting, tag, _selectedCharacter.value)) {
-                    // A one-word answer already kept on the phone: plays at once, then the mic opens.
+        // Her name was heard and the request recorder is already running on the same microphone.
+        voiceCommandService.onWakeWordOnly = { keptTalking ->
+            voiceCommandService.startConversation()
+            val tts = speechEngine
+            val tag = java.util.Locale.forLanguageTag(com.example.ai.VoiceLanguages.tagFor(_settings.value.preferredLanguage)).toLanguageTag()
+            val greeting = WAKE_ANSWER[tag.substringBefore('-')]
+            when {
+                // "Hi Elsa, open WhatsApp": the request is already being taken, so no answer.
+                keptTalking -> characterController.transitionTo(CharacterRuntimeState.Listening)
+                // Her one-word answer, kept on the phone: plays at once, then she listens again.
+                tts != null && greeting != null && com.example.ai.NaturalVoice.isReady(greeting, tag, _selectedCharacter.value) ->
                     characterController.speakWithLipSync(appContext, tts, greeting, _selectedCharacter.value, tag)
-                } else {
-                    // Not prepared yet (first use, offline, no quota): beep and listen right away.
+                // Not prepared yet (first use, offline): just listen, and prepare it for next time.
+                else -> {
                     characterController.transitionTo(CharacterRuntimeState.Listening)
-                    voiceCommandService.startPersistentListeningLoop(forceImmediateCommandCapture = true)
                     prepareVoiceLines()
                 }
             }
@@ -577,7 +574,8 @@ class CadenceViewModel(
 
     /** Mic button: one spoken turn by default; a live call when "Live voice chat" is on (or one is running). */
     fun onMicButton(hasRecordPermission: Boolean) {
-        if (_settings.value.liveVoiceChat || liveConversation.isActive()) toggleLiveConversation()
+        // Live voice chat is hidden until it is rebuilt on the one-microphone design.
+        if (liveConversation.isActive()) toggleLiveConversation()
         else voiceCommandService.triggerManualMicSession(hasRecordPermission)
     }
 
@@ -1247,12 +1245,16 @@ class CadenceViewModel(
      * A spoken turn: the recording goes straight to the AI, which hears it in any language and
      * answers in the same request (no on-phone speech-to-text).
      */
+    private var audioTurnJob: kotlinx.coroutines.Job? = null
+
     fun sendAudioToMochi(context: Context, tts: TextToSpeech?, wav: ByteArray) {
-        if (_isCompanionThinking.value) { voiceCommandService.clearAwaitingReply(); return }
+        // A new request replaces one still being answered (the user talked over her).
+        audioTurnJob?.cancel()
+        val myTurn = voiceCommandService.turnId
         val uid = _currentUserId.value
         val activeChar = _selectedCharacter.value
         val history = _chatHistory.value
-        viewModelScope.launch {
+        audioTurnJob = viewModelScope.launch {
             _isCompanionThinking.value = true
             characterController.transitionTo(CharacterRuntimeState.Thinking)
             try {
@@ -1274,6 +1276,11 @@ class CadenceViewModel(
                     characterController.transitionTo(CharacterRuntimeState.Idle)
                     return@launch
                 }
+                if (myTurn != voiceCommandService.turnId) {
+                    // The user talked over her while she was thinking: this answer is for an old request.
+                    characterController.transitionTo(CharacterRuntimeState.Listening)
+                    return@launch
+                }
                 val (heard, turn) = result.getOrElse { e ->
                     if (e is kotlinx.coroutines.CancellationException) throw e
                     if (com.example.ai.AiDiagnostics.classify(e.cause ?: e) == com.example.ai.AiDiagnostics.Reason.QUOTA) {
@@ -1289,7 +1296,10 @@ class CadenceViewModel(
                     voiceCommandService.onNothingForMe()
                     return@launch
                 }
-                voiceCommandService.onUserSaid(heard)
+                if (!voiceCommandService.onUserSaid(heard)) {
+                    characterController.transitionTo(CharacterRuntimeState.Listening)
+                    return@launch
+                }
                 _chatHistory.value = _chatHistory.value + CompanionChatTurn(id = UUID.randomUUID().toString(), senderIsUser = true, message = heard)
 
                 // "Stop" / "cancel", picking a video, or switching language: handled on the phone.
@@ -1320,8 +1330,11 @@ class CadenceViewModel(
                 android.util.Log.w("CadenceViewModel", "Audio turn failed: ${e.javaClass.simpleName}")
                 reportOutcome(context, tts, ActionOutcome.Failed("Something went wrong on my side. Please try again."))
             } finally {
-                _isCompanionThinking.value = false
-                voiceCommandService.clearAwaitingReply()
+                // Only the newest request clears "thinking"; a replaced one leaves it to its successor.
+                if (myTurn == voiceCommandService.turnId) {
+                    _isCompanionThinking.value = false
+                    voiceCommandService.clearAwaitingReply()
+                }
             }
         }
     }

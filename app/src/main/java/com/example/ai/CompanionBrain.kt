@@ -162,6 +162,7 @@ class CompanionBrain {
                     "They most likely speak " + preferredLanguage.ifBlank { "English" } + " right now; they also use Arabic (any dialect), " +
                     "Persian and English and may mix them. Decide the language from the SOUND of the words, never from the " +
                     "conversation above, and do not translate: English speech is written in English, Arabic in Arabic. " +
+                    "The recording may begin with your name (the wake phrase); leave it out of the transcript and answer the rest. " +
                     "Fill \"transcript\" with what they said and answer it. The mic was opened for you, so do not treat clear " +
                     "speech as 'other people'. Leave transcript and reply empty only when no words can be made out.")
             } else {

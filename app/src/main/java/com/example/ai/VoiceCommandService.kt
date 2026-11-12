@@ -92,7 +92,11 @@ class VoiceCommandService(
         /** Safety net: stop waiting for a reply after this long. */
         private const val AWAIT_REPLY_TIMEOUT_MS = 20_000L
         /** Pause after she stops talking before a follow-up listen, so the room echo has died down. */
-        private const val FOLLOW_UP_DELAY_MS = 350L
+        private const val FOLLOW_UP_DELAY_MS = 250L
+        /** Her voice's echo tail after she stops (skipped when the next turn starts): 0.2 s. */
+        private const val ECHO_TAIL_SAMPLES = 3_200L
+        /** Lead-in kept before the user's first loud frame when they talk over her: 0.3 s. */
+        private const val TALK_OVER_LEAD_SAMPLES = 4_800L
         /** Pause that ends the user's turn (Android's default is shorter and cuts people off). */
         private const val END_OF_SPEECH_SILENCE_MS = 1_800L
         /** Quiet turns in a row before she says goodbye and stops listening. */
@@ -193,6 +197,7 @@ class VoiceCommandService(
             while (true) {
                 delay(1_000L)
                 checkOtherRecorders()
+                syncHub()
                 tickPhase()
                 if (++ticks % 5 == 0) launch(Dispatchers.Default) { PerfMeter.sample() }
             }
@@ -214,7 +219,7 @@ class VoiceCommandService(
     private var pausedForCall = false
 
     private fun ownSessionIds(): Set<Int> =
-        setOf(wakeEngine.activeSessionId, capture?.sessionId ?: -1) - (-1)
+        setOf(hub.sessionId) - (-1)
 
     private fun checkOtherRecorders() {
         val mode = audioManager.mode
@@ -264,8 +269,11 @@ class VoiceCommandService(
     private val _inConversation = MutableStateFlow(false)
     val inConversation: StateFlow<Boolean> = _inConversation.asStateFlow()
 
-    /** Called when only the wake phrase was heard ("Hey Mochi") — e.g. to open a live voice call. */
-    var onWakeWordOnly: (() -> Unit)? = null
+    /**
+     * Her name was heard and the request recorder is already running. The argument says whether
+     * the user kept talking after her name (then she should just listen, not answer).
+     */
+    var onWakeWordOnly: ((keptTalking: Boolean) -> Unit)? = null
     private var countdownJob: Job? = null
     private var restartListeningJob: Job? = null
     private var awaitReplyJob: Job? = null
@@ -351,8 +359,38 @@ class VoiceCommandService(
     private val onAudioCallback: ((ByteArray) -> Unit)?
         get() = callbackStack.lastOrNull()?.second?.onAudio
 
+    // ---- The one microphone and what listens to it (see MicHub) ----
+    private val hub = MicHub()
+    @Volatile private var capture: SpeechCapture? = null
+    /** Feed the wake decoder (waiting for her name, or while she talks so her name can interrupt). */
+    @Volatile private var wakeFeeding = false
+    /** Watch for the user talking over her (while she thinks or speaks). */
+    @Volatile private var talkOverWatch = false
+    private val talkOver = TalkOverDetector()
+    /** Settings → "Interrupt by talking"; switched off for the session if her own voice trips it. */
+    @Volatile private var talkOverEnabled = true
+    private var lastCaptureWasTalkOver = false
+    private var echoTalkOvers = 0
+    /** The phone's own recogniser is listening (it needs the mic to itself). */
+    private var phoneRecognizerSession = false
+    private var speakEndSample = 0L
+    /**
+     * Increases with every new request. A reply that arrives for an older request (the user
+     * talked over her meanwhile) is dropped by whoever was going to speak it.
+     */
+    @Volatile var turnId = 0L
+        private set
+
+    private val frameSink = MicHub.FrameSink { frame, rms, start ->
+        if (wakeFeeding) wakeEngine.feed(frame, rms, start)
+        capture?.feed(frame, rms)
+        if (talkOverWatch) {
+            val from = talkOver.feed(rms, start)
+            if (from >= 0) mainHandler.post { onTalkOver(from) }
+        }
+    }
+
     // ---- Listening engine: the AI hears the audio (default), or the phone's recogniser ----
-    private var capture: SpeechCapture? = null
     @Volatile private var aiListening = true
     /** After a quota error the phone's recogniser is used until this time. */
     @Volatile private var phoneRecognizerUntil = 0L
@@ -468,7 +506,7 @@ class VoiceCommandService(
     /** For Diagnostics: the wake variants listened for and the phone's audio clean-up. */
     val wakeStatus: String
         get() = "Listening for: " + wakeMatcher.variants.joinToString(" / ") { it.joinToString(" ") } +
-            "\nMicrophone clean-up: " + wakeEngine.lastAudioEffects
+            "\nMicrophone clean-up: " + hub.audioEffects
 
     /** Contact and app names the recogniser should favour ("Ali Odeh", not "Ali audits"). */
     @Volatile private var biasingStrings: ArrayList<String> = arrayListOf()
@@ -592,21 +630,28 @@ class VoiceCommandService(
                 awaitingReply = false
                 awaitReplyJob?.cancel()
                 restartListeningJob?.cancel()
-                // A spoken request in progress ends; quiet wake listening carries on so the user
-                // can interrupt her by saying the wake phrase or "stop".
+                // A request being recorded ends; her name (and talking over her) can still interrupt.
                 if (sessionKind == SessionKind.COMMAND) cancelSession(destroy = false)
+                talkOver.reset(TalkOverDetector.Mode.SPEAKING)
                 reevaluate()
-            } else if (conversationActive && hosts.isNotEmpty() && hasRecordPermission && !liveCallActive) {
-                // In a conversation: listen for the next thing the user says, once the speaker is quiet.
-                restartListeningJob?.cancel()
-                restartListeningJob = scope.launch(Dispatchers.Main) {
-                    delay(FOLLOW_UP_DELAY_MS)
-                    if (!assistantSpeaking && !awaitingReply && sessionKind != SessionKind.COMMAND) startSession(SessionKind.COMMAND)
-                }
             } else {
-                // Give the speaker a moment to go quiet before the mic opens again.
-                reevaluate(delayMs = 700L)
+                speakEndSample = hub.samplesRecorded
+                if (talkOver.herVoiceLevel > 0) VoiceLog.add(VoiceLog.Kind.SPOKE, "Her voice reached the mic at level %.0f after echo cancelling".format(talkOver.herVoiceLevel))
+                if (conversationActive && hosts.isNotEmpty() && hasRecordPermission && !liveCallActive) {
+                    // In a conversation: take the next thing the user says. The mic never closed,
+                    // so anything said since she stopped (minus her echo tail) is included.
+                    restartListeningJob?.cancel()
+                    restartListeningJob = scope.launch(Dispatchers.Main) {
+                        delay(FOLLOW_UP_DELAY_MS)
+                        if (!assistantSpeaking && !awaitingReply && sessionKind != SessionKind.COMMAND) {
+                            startCapture(seedFrom = speakEndSample + ECHO_TAIL_SAMPLES)
+                        }
+                    }
+                } else {
+                    reevaluate(delayMs = 300L)
+                }
             }
+            updateFeeds()
         }
     }
 
@@ -655,18 +700,65 @@ class VoiceCommandService(
         }
     }
 
+    /** The microphone is needed for anything at all right now. */
+    private fun hubNeeded(): Boolean =
+        hosts.isNotEmpty() && hasRecordPermission && !liveCallActive && !pausedForCall && !phoneRecognizerSession &&
+            (sessionKind != null || assistantSpeaking || awaitingReply || conversationActive || wantsWakeSession())
+
+    /** Opens or closes the one microphone to match what is needed. */
+    private fun syncHub() {
+        if (hubNeeded()) {
+            if (!hub.isRunning) {
+                hub.sink = frameSink
+                val ok = hub.start(onError = { reason -> mainHandler.post { hub.stop(); onHardError(reason, destroy = false) } })
+                if (!ok) { onHardError("microphone busy", destroy = false); return }
+                VoiceLog.add(VoiceLog.Kind.WAKE, "Microphone on (${hub.audioEffects})")
+            }
+        } else if (hub.isRunning) {
+            hub.stop()
+            VoiceLog.add(VoiceLog.Kind.WAKE, "Microphone off")
+        }
+        updateFeeds()
+    }
+
+    /** Who gets the microphone's frames right now. */
+    private fun updateFeeds() {
+        wakeFeeding = sessionKind == SessionKind.WAKE && wakeEngine.isListening
+        val watch = talkOverEnabled && sessionKind != SessionKind.COMMAND && (assistantSpeaking || awaitingReply)
+        if (watch && !talkOverWatch) talkOver.reset(if (assistantSpeaking) TalkOverDetector.Mode.SPEAKING else TalkOverDetector.Mode.THINKING)
+        talkOverWatch = watch
+    }
+
+    /**
+     * The user started talking while she was thinking or speaking: she stops, drops the answer she
+     * was preparing, and takes the new request from its first word.
+     */
+    private fun onTalkOver(fromSample: Long) {
+        if (!talkOverWatch || sessionKind == SessionKind.COMMAND) return
+        if (assistantSpeaking) bargeIn("You talked over her: she stopped and is listening")
+        if (awaitingReply) {
+            awaitReplyJob?.cancel()
+            awaitingReply = false
+            turnId++
+            VoiceLog.add(VoiceLog.Kind.WAKE, "You spoke while she was thinking: her answer is dropped, listening to you")
+        }
+        startCapture(seedFrom = fromSample - TALK_OVER_LEAD_SAMPLES, talkOver = true)
+    }
+
     /** Decides whether the passive wake loop should be running, and (re)starts it if so. */
     private fun reevaluate(delayMs: Long = 0L) {
         restartListeningJob?.cancel()
         if (sessionKind == SessionKind.COMMAND) {
             if (hosts.isEmpty() || !hasRecordPermission || liveCallActive) cancelSession(destroy = hosts.isEmpty())
+            syncHub()
             return
         }
         if (!wantsWakeSession()) {
             if (sessionKind != null) cancelSession(destroy = hosts.isEmpty())
+            syncHub()
             return
         }
-        if (sessionKind == SessionKind.WAKE) return
+        if (sessionKind == SessionKind.WAKE) { syncHub(); return }
         if (delayMs <= 0L) {
             startWakeListening()
         } else {
@@ -684,7 +776,7 @@ class VoiceCommandService(
         activeSpeakers.forEach { stop -> try { stop() } catch (_: Throwable) {} }
     }
 
-    /** Passive listening for the wake phrase: the offline engine, never the SpeechRecognizer loop. */
+    /** Passive listening for the wake phrase: the offline decoder on the shared microphone. */
     private fun startWakeListening() {
         if (!wantsWakeSession()) return
         if (!wakeEngine.isReady) {
@@ -698,24 +790,7 @@ class VoiceCommandService(
         if (sessionKind != null) cancelSession(destroy = false)
         val started = wakeEngine.start(
             matcher = wakeMatcher,
-            onWake = {
-                onSessionEnded()
-                hardErrorCount = 0
-                if (assistantSpeaking) {
-                    if (echoGuard.saidRecently(wakeMatcher.words)) {
-                        // She said her own wake phrase out loud: that's not the user.
-                        VoiceLog.add(VoiceLog.Kind.IGNORED, "Heard the wake phrase in her own voice")
-                        reevaluate()
-                        return@start
-                    }
-                    bargeIn("Interrupted her with the wake phrase")
-                } else {
-                    VoiceLog.add(VoiceLog.Kind.WAKE, "Wake phrase heard")
-                    wakeAt = System.currentTimeMillis()
-                }
-                // Open a live call if the user chose that, else take one spoken request.
-                onWakeWordOnly?.invoke() ?: startSession(SessionKind.COMMAND)
-            },
+            onWake = { keptTalking, utteranceStart -> onWakePhrase(keptTalking, utteranceStart) },
             onAbort = {
                 if (assistantSpeaking && !echoGuard.saidRecently(listOf("stop")) && !echoGuard.saidRecently(listOf("cancel"))) {
                     bargeIn("Stopped her (\"stop\")")
@@ -724,21 +799,49 @@ class VoiceCommandService(
                     VoiceLog.add(VoiceLog.Kind.WAKE, "Countdown cancelled by voice")
                     cancelPendingAction()
                 }
-            },
-            onError = { reason -> onHardError(reason, destroy = false) }
+            }
         )
         if (!started) {
-            onHardError("microphone busy", destroy = false)
+            onHardError("wake listener could not start", destroy = false)
             return
         }
         sessionKind = SessionKind.WAKE
+        syncHub()
+        if (!hub.isRunning) return
         _wakeWordArmed.value = false
         _isActivelyListening.value = false
         _isWakeLoopRunning.value = true
     }
 
-    /** One spoken turn recorded for the AI (see [SpeechCapture]): any language, no beeps. */
-    private fun startCapture() {
+    /**
+     * Her name was heard. The request recorder starts at once on the same microphone: if the user
+     * kept talking ("Hi Elsa, open WhatsApp"), from the start of that utterance (the AI ignores her
+     * name), else from now. Then the view model decides whether she answers ("Yes?") or just listens.
+     */
+    private fun onWakePhrase(keptTalking: Boolean, utteranceStart: Long) {
+        hardErrorCount = 0
+        if (assistantSpeaking) {
+            if (echoGuard.saidRecently(wakeMatcher.words)) {
+                // She said her own wake phrase out loud: that's not the user.
+                VoiceLog.add(VoiceLog.Kind.IGNORED, "Heard the wake phrase in her own voice")
+                return
+            }
+            bargeIn("Interrupted her with the wake phrase")
+        } else {
+            VoiceLog.add(VoiceLog.Kind.WAKE, if (keptTalking) "Wake phrase heard, with your request in the same breath" else "Wake phrase heard")
+        }
+        wakeAt = System.currentTimeMillis()
+        wakeEngine.stop()
+        val from = if (keptTalking && utteranceStart >= 0) utteranceStart else hub.samplesRecorded
+        startCapture(seedFrom = from)
+        onWakeWordOnly?.invoke(keptTalking && utteranceStart >= 0)
+    }
+
+    /**
+     * One spoken turn for the AI (see [SpeechCapture]), taken from the shared microphone. [seedFrom]
+     * is the recorded sample to start from, so words already spoken are not lost.
+     */
+    private fun startCapture(seedFrom: Long = hub.samplesRecorded, talkOver: Boolean = false) {
         restartListeningJob?.cancel()
         if (otherAppUsingMic) {
             VoiceLog.add(VoiceLog.Kind.IGNORED, "Not listening: another app has the microphone right now")
@@ -746,40 +849,42 @@ class VoiceCommandService(
             return
         }
         if (sessionKind != null) cancelSession(destroy = false)
+        sessionKind = SessionKind.COMMAND
+        syncHub()
+        if (!hub.isRunning) { sessionKind = null; return }
         val c = SpeechCapture(
             onLevel = { db -> if (sessionKind == SessionKind.COMMAND) _micRmsDb.value = ((db - 30f) / 4f).coerceIn(0f, 10f) },
             onSpeechStarted = { _livePartialTranscript.value = "…" },
             onUtterance = { wav ->
-                capture = null
+                if (capture?.isFinished == true) capture = null
                 onSessionEnded()
                 hardErrorCount = 0
                 _livePartialTranscript.value = ""
                 deliverAudio(wav)
             },
             onNoSpeech = { wav, loudest, needed ->
-                capture = null
+                if (capture?.isFinished == true) capture = null
                 VoiceLog.add(VoiceLog.Kind.IGNORED, "No speech heard in %.0f s (loudest sound %.0f, speech needs %.0f). Play it back in Diagnostics.".format((wav.size - 44) / 32_000.0, loudest, needed))
                 scope.launch(Dispatchers.IO) { runCatching { lastHeardFile(appContext).writeBytes(wav) } }
                 onSessionEnded()
                 _livePartialTranscript.value = ""
                 handleQuietTurn(notUnderstood = false)
-            },
-            onError = { reason ->
-                capture = null
-                VoiceLog.add(VoiceLog.Kind.ERROR, reason)
-                onHardError(reason, destroy = false)
             }
         )
+        val earlier = hub.framesSince(seedFrom.coerceAtLeast(0L))
+        c.seed(earlier)
         capture = c
-        sessionKind = SessionKind.COMMAND
+        lastCaptureWasTalkOver = talkOver
         _wakeWordArmed.value = true
         _isActivelyListening.value = true
         _isWakeLoopRunning.value = false
         _livePartialTranscript.value = ""
-        Earcon.listening() // "your turn": the same soft beep every time the mic opens
-        c.start()
+        updateFeeds()
         val sinceWake = System.currentTimeMillis() - wakeAt
-        VoiceLog.add(VoiceLog.Kind.HEARD, "Mic open, the AI is listening" + if (wakeAt > 0 && sinceWake < 15_000) " (%.1f s after her name)".format(sinceWake / 1000.0) else "")
+        val already = earlier.sumOf { it.size } / 16_000.0
+        VoiceLog.add(VoiceLog.Kind.HEARD, "Listening for your request" +
+            (if (wakeAt > 0 && sinceWake < 15_000) " (%.1f s after her name)".format(sinceWake / 1000.0) else "") +
+            (if (already >= 0.3) ", including %.1f s you had already said".format(already) else ""))
         wakeAt = 0L
     }
 
@@ -790,6 +895,7 @@ class VoiceCommandService(
         VoiceLog.add(VoiceLog.Kind.HEARD, "Sent %.1f s of sound to the AI".format(lastUtteranceSec))
         // Kept on the phone only, replaced every turn: Diagnostics can play back what she heard.
         scope.launch(Dispatchers.IO) { runCatching { lastHeardFile(appContext).writeBytes(wav) } }
+        turnId++
         awaitingReply = true
         awaitReplyJob?.cancel()
         awaitReplyJob = scope.launch(Dispatchers.Main) {
@@ -797,17 +903,34 @@ class VoiceCommandService(
             awaitingReply = false
             reevaluate()
         }
+        updateFeeds()
+        syncHub()
         callback(wav)
     }
 
-    /** The AI heard the user say [transcript] (an audio turn). */
-    fun onUserSaid(transcript: String) {
-        runOnMain {
-            VoiceLog.add(VoiceLog.Kind.HEARD, "\"$transcript\"")
-            quietTurns = 0
-            userTurns++
-            if (GOODBYE_REGEX.containsMatchIn(transcript)) endConversation("goodbye")
+    /**
+     * The AI heard the user say [transcript] (an audio turn). Returns false when it should be
+     * ignored: words she herself said, picked up when the user seemed to talk over her. Main thread.
+     */
+    fun onUserSaid(transcript: String): Boolean {
+        if (lastCaptureWasTalkOver && echoGuard.isEcho(transcript)) {
+            lastCaptureWasTalkOver = false
+            echoTalkOvers++
+            VoiceLog.add(VoiceLog.Kind.IGNORED, "That was her own voice, not you: \"$transcript\"")
+            if (echoTalkOvers >= 2) {
+                talkOverEnabled = false
+                VoiceLog.add(VoiceLog.Kind.ERROR, "Interrupting by talking is off until the app restarts: the phone's echo canceller lets her voice through. Say her name to interrupt her.")
+            }
+            updateFeeds()
+            reevaluate(delayMs = 300L)
+            return false
         }
+        lastCaptureWasTalkOver = false
+        VoiceLog.add(VoiceLog.Kind.HEARD, "\"$transcript\"")
+        quietTurns = 0
+        userTurns++
+        if (GOODBYE_REGEX.containsMatchIn(transcript)) endConversation("goodbye")
+        return true
     }
 
     private var lastUtteranceSec = 0.0
@@ -872,6 +995,8 @@ class VoiceCommandService(
                 }
             }
             sessionKind = SessionKind.COMMAND
+            phoneRecognizerSession = true
+            syncHub() // closes the shared mic: the phone's recogniser needs it alone
             _wakeWordArmed.value = true
             _isActivelyListening.value = true
             _isWakeLoopRunning.value = false
@@ -892,8 +1017,9 @@ class VoiceCommandService(
 
     private fun cancelSession(destroy: Boolean) {
         beeps.unmute()
-        capture?.stop()
+        capture?.cancel()
         capture = null
+        phoneRecognizerSession = false
         val hadSession = sessionKind != null
         sessionKind = null
         _isActivelyListening.value = false
@@ -915,6 +1041,8 @@ class VoiceCommandService(
 
     private fun onSessionEnded() {
         sessionKind = null
+        phoneRecognizerSession = false
+        updateFeeds()
         _isActivelyListening.value = false
         _isWakeLoopRunning.value = false
         _wakeWordArmed.value = false
@@ -1241,6 +1369,7 @@ class VoiceCommandService(
         awaitReplyJob?.cancel()
         runOnMain {
             cancelSession(destroy = true)
+            hub.stop()
             wakeEngine.release()
         }
     }

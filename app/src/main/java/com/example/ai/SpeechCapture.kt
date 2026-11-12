@@ -1,11 +1,5 @@
 package com.example.ai
 
-import android.annotation.SuppressLint
-import android.media.AudioFormat
-import android.media.AudioRecord
-import android.media.MediaRecorder
-import android.media.audiofx.AcousticEchoCanceler
-import android.media.audiofx.NoiseSuppressor
 import android.os.Handler
 import android.os.Looper
 import java.io.ByteArrayOutputStream
@@ -16,10 +10,11 @@ import kotlin.math.max
 import kotlin.math.sqrt
 
 /**
- * Records one spoken turn for the AI to hear directly (no on-phone speech-to-text, so no single
- * language, no beeps, no cut-offs). The microphone runs in voice-call mode with the phone's echo
- * canceller and noise suppressor, and a voice-activity detector decides when the user started
- * and when they finished. Callbacks arrive on the main thread.
+ * Collects one spoken turn for the AI to hear directly (no on-phone speech-to-text, so no single
+ * language). It does not own a microphone: [MicHub] feeds it frames, so it can start with audio
+ * that was already recorded (the request said in the same breath as her name, or words spoken
+ * while she was still talking). A voice-activity detector decides when the user started and
+ * finished. Results are delivered once, on the main thread.
  */
 class SpeechCapture(
     private val onLevel: (Float) -> Unit,
@@ -31,122 +26,70 @@ class SpeechCapture(
      * level in it and the level speech had to reach, so "she didn't hear me" can be checked.
      */
     private val onNoSpeech: (ByteArray, Double, Double) -> Unit,
-    private val onError: (String) -> Unit
+    /** Quiet that ends a turn: shorter for a short request, longer once they talk at length. */
+    shortEndSilenceMs: Int = 900,
+    longEndSilenceMs: Int = 1_300
 ) {
     private val main = Handler(Looper.getMainLooper())
-    @Volatile private var running = false
-    private var thread: Thread? = null
+    private val vad = VoiceActivity(endSilenceMs = longEndSilenceMs, shortEndSilenceMs = shortEndSilenceMs)
+    private val preRoll = ArrayDeque<ShortArray>()
+    private val speech = ByteArrayOutputStream()
+    private val everything = ByteArrayOutputStream() // the whole wait, for the no-speech report
+    @Volatile private var done = false
+    private var levelTick = 0
 
-    val isRunning: Boolean get() = running
+    /** True once a result was delivered or the capture was cancelled. */
+    val isFinished: Boolean get() = done
 
-    /** The recorder's audio session (to recognise her own recording in Android's list), -1 if none. */
-    @Volatile var sessionId = -1
-        private set
+    /** Stops without delivering anything. */
+    fun cancel() { done = true }
 
-    fun start(): Boolean {
-        if (running) return true
-        running = true
-        thread = Thread(::loop, "speech-capture").apply { start() }
-        return true
+    /** Audio recorded before the capture began (fed in order, before live frames). */
+    @Synchronized
+    fun seed(frames: List<ShortArray>) {
+        for (f in frames) { if (done) return; feed(f, rms(f)) }
     }
 
-    /** Stops at once and waits briefly until the microphone is released. Nothing is delivered. */
-    fun stop() {
-        running = false
-        val t = thread
-        thread = null
-        if (t != null && t !== Thread.currentThread()) try { t.join(STOP_WAIT_MS) } catch (_: InterruptedException) {}
-    }
-
-    @SuppressLint("MissingPermission") // only started when RECORD_AUDIO is granted
-    private fun loop() {
-        val minBuf = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        val record = openRecorder(maxOf(minBuf, RATE)) ?: run {
-            running = false
-            main.post { onError("The microphone is busy.") }
-            return
-        }
-        sessionId = record.audioSessionId
-        val effects = buildList {
-            if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(record.audioSessionId)?.let { it.enabled = true; add(it) }
-            if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(record.audioSessionId)?.let { it.enabled = true; add(it) }
-        }
-        val vad = VoiceActivity()
-        val frame = ShortArray(FRAME)
-        val preRoll = ArrayDeque<ShortArray>()
-        val speech = ByteArrayOutputStream()
-        val everything = ByteArrayOutputStream() // the whole wait, for the no-speech report
-        var outcome: (() -> Unit)? = null
-        try {
-            record.startRecording()
-            while (running) {
-                val n = record.read(frame, 0, FRAME)
-                if (n <= 0) { if (n < 0) { outcome = { onError("Microphone error $n") }; break }; continue }
-                val chunk = frame.copyOf(n)
-                if (everything.size() < RATE * 2 * 12) everything.write(toBytes(chunk))
-                val event = vad.feed(rms(chunk))
-                main.post { onLevel(vad.lastDb) }
-                when (event) {
-                    VoiceActivity.Event.SPEECH_START -> {
-                        preRoll.forEach { speech.write(toBytes(it)) }
-                        preRoll.clear()
-                        speech.write(toBytes(chunk))
-                        main.post(onSpeechStarted)
-                    }
-                    VoiceActivity.Event.IN_SPEECH -> speech.write(toBytes(chunk))
-                    VoiceActivity.Event.SPEECH_END -> {
-                        speech.write(toBytes(chunk))
-                        val wav = wav(speech.toByteArray())
-                        outcome = { onUtterance(wav) }
-                        break
-                    }
-                    VoiceActivity.Event.FALSE_START -> speech.reset()
-                    VoiceActivity.Event.TIMEOUT -> {
-                        val heard = wav(everything.toByteArray())
-                        val loudest = vad.peakRms
-                        val needed = vad.lastThreshold
-                        outcome = { onNoSpeech(heard, loudest, needed) }
-                        break
-                    }
-                    VoiceActivity.Event.SILENCE -> {
-                        preRoll.addLast(chunk)
-                        while (preRoll.size > PRE_ROLL_FRAMES) preRoll.removeFirst()
-                    }
-                }
+    /** One frame from the microphone thread. */
+    @Synchronized
+    fun feed(chunk: ShortArray, frameRms: Double) {
+        if (done) return
+        if (everything.size() < RATE * 2 * 12) everything.write(toBytes(chunk))
+        val event = vad.feed(frameRms)
+        if (++levelTick % 3 == 0) { val db = vad.lastDb; main.post { onLevel(db) } }
+        when (event) {
+            VoiceActivity.Event.SPEECH_START -> {
+                preRoll.forEach { speech.write(toBytes(it)) }
+                preRoll.clear()
+                speech.write(toBytes(chunk))
+                main.post(onSpeechStarted)
             }
-        } catch (e: Exception) {
-            outcome = { onError("Microphone error: ${e.javaClass.simpleName}") }
-        } finally {
-            effects.forEach { try { it.release() } catch (_: Throwable) {} }
-            try { record.stop() } catch (_: Throwable) {}
-            record.release()
-            sessionId = -1
-            val deliver = outcome
-            val wasRunning = running
-            running = false
-            if (deliver != null && wasRunning) main.post(deliver)
+            VoiceActivity.Event.IN_SPEECH -> speech.write(toBytes(chunk))
+            VoiceActivity.Event.SPEECH_END -> {
+                speech.write(toBytes(chunk))
+                val wav = wav(speech.toByteArray())
+                finish { onUtterance(wav) }
+            }
+            VoiceActivity.Event.FALSE_START -> speech.reset()
+            VoiceActivity.Event.TIMEOUT -> {
+                val heard = wav(everything.toByteArray())
+                val loudest = vad.peakRms
+                val needed = vad.lastThreshold
+                finish { onNoSpeech(heard, loudest, needed) }
+            }
+            VoiceActivity.Event.SILENCE -> {
+                preRoll.addLast(chunk)
+                while (preRoll.size > PRE_ROLL_FRAMES) preRoll.removeFirst()
+            }
         }
     }
 
-    @SuppressLint("MissingPermission")
-    private fun openRecorder(bufBytes: Int): AudioRecord? {
-        for (source in listOf(MediaRecorder.AudioSource.VOICE_COMMUNICATION, MediaRecorder.AudioSource.VOICE_RECOGNITION, MediaRecorder.AudioSource.MIC)) {
-            val r = try {
-                if (android.os.Build.VERSION.SDK_INT >= 30) {
-                    AudioRecord.Builder()
-                        .setAudioSource(source)
-                        .setAudioFormat(AudioFormat.Builder().setSampleRate(RATE).setChannelMask(AudioFormat.CHANNEL_IN_MONO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
-                        .setBufferSizeInBytes(bufBytes)
-                        .setPrivacySensitive(false)
-                        .build()
-                } else {
-                    AudioRecord(source, RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufBytes)
-                }
-            } catch (_: Exception) { null }
-            if (r != null && r.state == AudioRecord.STATE_INITIALIZED) return r
-            r?.release()
-        }
-        return null
+    /** True while the user is speaking (for "did they keep talking after her name?"). */
+    val inSpeech: Boolean get() = vad.isInSpeech
+
+    private fun finish(deliver: () -> Unit) {
+        done = true
+        main.post { deliver() }
     }
 
     companion object {
@@ -154,7 +97,6 @@ class SpeechCapture(
         /** 30 ms frames. */
         const val FRAME = RATE * 30 / 1000
         private const val PRE_ROLL_FRAMES = 15 // 450 ms before speech is detected
-        private const val STOP_WAIT_MS = 400L
 
         fun rms(samples: ShortArray): Double {
             if (samples.isEmpty()) return 0.0
@@ -163,7 +105,7 @@ class SpeechCapture(
             return sqrt(sum / samples.size)
         }
 
-        private fun toBytes(samples: ShortArray): ByteArray {
+        fun toBytes(samples: ShortArray): ByteArray {
             val buf = ByteBuffer.allocate(samples.size * 2).order(ByteOrder.LITTLE_ENDIAN)
             samples.forEach { buf.putShort(it) }
             return buf.array()
@@ -188,12 +130,17 @@ class SpeechCapture(
  */
 class VoiceActivity(
     private val endSilenceMs: Int = 1_300,
+    /** Used while the request is still short (under [longAfterVoicedMs] of voice). */
+    shortEndSilenceMs: Int = 900,
+    private val longAfterVoicedMs: Int = 2_500,
     private val noSpeechTimeoutMs: Int = 7_000,
     private val maxUtteranceMs: Int = 25_000,
     private val frameMs: Int = 30
 ) {
     enum class Event { SILENCE, SPEECH_START, IN_SPEECH, SPEECH_END, FALSE_START, TIMEOUT }
 
+    private val shortEndMs = minOf(shortEndSilenceMs, endSilenceMs)
+    val isInSpeech: Boolean get() = inSpeech
     private var noiseFloor = -1.0
     private var aboveRun = 0
     private var belowRun = 0
@@ -232,7 +179,8 @@ class VoiceActivity(
         speechFrames++
         belowRun = if (rms > threshold * END_RATIO) 0 else belowRun + 1
         val voicedMs = (speechFrames - belowRun) * frameMs
-        if (belowRun * frameMs >= endSilenceMs) {
+        val endAfter = if (voicedMs < longAfterVoicedMs) shortEndMs else endSilenceMs
+        if (belowRun * frameMs >= endAfter) {
             if (voicedMs < MIN_UTTERANCE_MS) {
                 // Just a bump: forget it and keep listening.
                 inSpeech = false; aboveRun = 0; speechFrames = 0

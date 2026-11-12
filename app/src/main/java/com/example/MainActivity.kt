@@ -578,7 +578,7 @@ fun MochiAppHost(
                             wakeWordEnabled = settings.wakeWordEnabled,
                             voicePhase = voicePhase,
                             voiceLanguageLabel = viewModel.voiceLanguageChip(settings.preferredLanguage),
-                            onCycleVoiceLanguage = { viewModel.cycleVoiceLanguage() },
+                            onPickVoiceLanguage = { code -> viewModel.pickVoiceLanguage(code) },
                             executedOrCancelledTurnIds = executedOrCancelledTurnIds,
                             onCancelTurnAction = viewModel::markTurnCancelled,
                             onExecuteTurnActionNow = { turn ->

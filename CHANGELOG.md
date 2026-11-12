@@ -2,6 +2,18 @@
 
 Every update gets a new version. Check yours in **Settings** (bottom of the screen): `MochiLife <version> (build <code>)`.
 
+## 2.7 (build 18)
+One microphone, no waiting (Phase "voice rebuild" of the Fix and Upgrade Plan).
+- One recorder stays open while voice is on, instead of a wake-word recorder and a request recorder that took turns. The wake detector, the request recorder and the talk-over detector all read the same microphone, so nothing you say falls into a gap. The last 8 seconds are kept in memory only (never stored or sent), so a request can start before she noticed it.
+- "Hi Elsa, open WhatsApp" in one breath works: the request is taken from the same recording, and she does not answer "Yes?" first. The AI is told the recording may start with her name.
+- No beep. After her name alone she answers with one word ("Yes?", "تفضل", "جانم؟", kept on the phone so it plays at once), then listens. The very first time, before that word is prepared, she just listens.
+- You can talk over her. While she is thinking, speaking clearly drops the answer she was preparing and she takes your new request from its first word. While she is speaking, she stops when you speak clearly above her own voice (her voice level after echo cancelling is measured and written to the voice log). If her own voice is mistaken for you twice, this switches itself off until the app restarts and saying her name still interrupts her.
+- Shorter end-of-turn pause: 0.9 s of quiet ends a short request, 1.3 s once you have talked for more than 2.5 s. After she speaks, listening resumes within 0.25 s and includes anything you said meanwhile (minus her 0.2 s echo tail).
+- The language chip opens a small menu (English, العربية, فارسی) instead of cycling, and a double tap counts once.
+- Live voice chat is hidden until it is rebuilt on the one-microphone design.
+- Voice log: "Microphone on/off", "Listening for your request (including N s you had already said)", "Wake phrase heard, with your request in the same breath", talk-over events.
+- Not in this version: sending her first sentence to the voice while the rest of the reply is still arriving (the reply comes as one structured answer, so this needs a different request format; planned with the server work), and warming the connection on her name.
+
 ## 2.6 (build 17)
 Speed and "is she listening?" fixes from the second S22+ log.
 - Her voice is streamed: she starts talking when the first sound arrives instead of after the whole sentence is prepared (it was 3.5–3.8 s every time). If streaming is not available she falls back to the old way, then to the phone's voice.

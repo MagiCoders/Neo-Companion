@@ -330,7 +330,10 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
                         voice.onNothingForMe()
                         return@launch
                     }
-                    voice.onUserSaid(heard)
+                    if (!voice.onUserSaid(heard)) {
+                        controller.transitionTo(CharacterRuntimeState.Listening)
+                        return@launch
+                    }
                     if (trySwitchLanguage(heard)) return@launch
                     aiTurn
                 } else com.example.ai.LocalCommands.parse(clean, voice.recognitionLanguageTag)

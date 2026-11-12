@@ -813,16 +813,7 @@ fun ProfileAndSettingsScreen(
                 palette = p,
                 onCheckedChange = { enabled -> onUpdateSettings { it.copy(silentListening = enabled) } }
             )
-            HairlineDivider(p.hairline)
-            SettingsIconToggleRow(
-                icon = Icons.Outlined.Language,
-                title = "Live voice chat (beta)",
-                subtitle = "Open conversation instead of one turn at a time. Use headphones, or she may hear herself.",
-                checked = settings.liveVoiceChat,
-                accent = accent,
-                palette = p,
-                onCheckedChange = { enabled -> onUpdateSettings { it.copy(liveVoiceChat = enabled) } }
-            )
+            // "Live voice chat" is hidden until it is rebuilt on the one-microphone design (2.7).
             HairlineDivider(p.hairline)
             SettingsIconToggleRow(
                 icon = Icons.Outlined.Language,

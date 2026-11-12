@@ -1,12 +1,6 @@
 package com.example.ai
 
-import android.annotation.SuppressLint
 import android.content.Context
-import android.media.AudioFormat
-import android.media.AudioRecord
-import android.media.MediaRecorder
-import android.media.audiofx.AcousticEchoCanceler
-import android.media.audiofx.NoiseSuppressor
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -51,6 +45,20 @@ class WakePhraseMatcher(
                 window.map { it.first } == phrase && window.all { it.second >= MIN_WORD_CONF }
             }
         }
+    }
+
+    /**
+     * How many words came after the wake phrase in the same utterance ("hi elsa [unk] [unk]" = 2):
+     * more than zero means the user kept talking, so the request is already in the recording.
+     */
+    fun wordsAfterWake(resultJson: String): Int {
+        val heard = parse(resultJson)
+        for (phrase in variants) {
+            for (start in 0..heard.size - phrase.size) {
+                if (heard.subList(start, start + phrase.size).map { it.first } == phrase) return heard.size - start - phrase.size
+            }
+        }
+        return 0
     }
 
     /** "stop" / "cancel" said on its own, confidently. */
@@ -202,17 +210,10 @@ class OfflineWakeWord(context: Context) {
     private var model: Model? = null
     private var loading = false
     val isLoading: Boolean get() = loading
-    @Volatile private var session: Session? = null
+    @Volatile private var decoder: Decoder? = null
 
     val isReady: Boolean get() = model != null
-    val isListening: Boolean get() = session != null
-
-    /** Audio session of the wake listener's own recording (so it isn't mistaken for another app). */
-    val activeSessionId: Int get() = session?.sessionId ?: -1
-
-    /** Whether the last session got the phone's echo canceller / noise suppressor (for Diagnostics). */
-    @Volatile var lastAudioEffects: String = "not started"
-        private set
+    val isListening: Boolean get() = decoder != null
 
     /** Unpacks (first run only) and loads the model in the background. */
     fun prepare(onReady: () -> Unit, onFailed: (String) -> Unit) {
@@ -231,29 +232,31 @@ class OfflineWakeWord(context: Context) {
         }
     }
 
-    /** Starts listening. Returns false if the microphone could not be opened. */
-    fun start(matcher: WakePhraseMatcher, onWake: () -> Unit, onAbort: () -> Unit, onError: (String) -> Unit): Boolean {
+    /**
+     * Starts listening for the phrase in the frames [feed] receives from the shared microphone.
+     * [onWake] gets whether the user kept talking after the phrase and the sample at which that
+     * utterance began (so the request can be taken from the recording). Main thread.
+     */
+    fun start(
+        matcher: WakePhraseMatcher,
+        onWake: (keptTalking: Boolean, utteranceStartSample: Long) -> Unit,
+        onAbort: () -> Unit
+    ): Boolean {
         val m = model ?: return false
-        if (session != null) return true
-        val s = Session(m, matcher, onWake, onAbort, onError)
-        if (!s.open()) return false
-        session = s
-        s.thread.start()
+        if (decoder != null) return true
+        decoder = try { Decoder(m, matcher, onWake, onAbort) } catch (e: Exception) { return false }
         return true
     }
 
-    /**
-     * Releases the microphone and waits (briefly) until it is really free, so the speech
-     * recogniser that starts next doesn't get silence from Android's shared-mic policy.
-     */
+    /** One frame from the microphone thread (ignored when not listening). */
+    fun feed(frame: ShortArray, rms: Double, startSample: Long) {
+        decoder?.feed(frame, rms, startSample)
+    }
+
     fun stop() {
-        val s = session ?: return
-        session = null
-        s.running = false
-        s.interruptRecording()
-        if (Thread.currentThread() !== s.thread) {
-            try { s.thread.join(STOP_WAIT_MS) } catch (_: InterruptedException) {}
-        }
+        val d = decoder ?: return
+        decoder = null
+        d.close()
     }
 
     fun release() {
@@ -279,124 +282,80 @@ class OfflineWakeWord(context: Context) {
         }
     }
 
-    private inner class Session(
-        private val model: Model,
+    /**
+     * Decodes 90 ms blocks behind a [SoundGate]: quiet blocks are only kept as lead-in, sound is
+     * decoded. Runs on the microphone thread; [close] may come from the main thread.
+     */
+    private inner class Decoder(
+        model: Model,
         private val matcher: WakePhraseMatcher,
-        private val onWake: () -> Unit,
-        private val onAbort: () -> Unit,
-        private val onError: (String) -> Unit
+        private val onWake: (Boolean, Long) -> Unit,
+        private val onAbort: () -> Unit
     ) {
-        @Volatile var running = true
-        private var record: AudioRecord? = null
-        val sessionId: Int get() = record?.audioSessionId ?: -1
-        private var recognizer: Recognizer? = null
-        private val effects = mutableListOf<android.media.audiofx.AudioEffect>()
-        val thread = Thread(::loop, "wake-word")
+        private val recognizer = Recognizer(model, SAMPLE_RATE.toFloat(), matcher.grammarJson()).apply {
+            setWords(true)
+            setEndpointerMode(ENDPOINTER_SHORT) // decide sooner after the phrase ends
+        }
+        private val gate = SoundGate()
+        private val leadIn = ArrayDeque<Pair<Long, ShortArray>>()
+        private val pending = ArrayList<ShortArray>(BLOCK_FRAMES)
+        private var pendingStart = 0L
+        private var utteranceStart = -1L
+        private var closed = false
 
-        /** Unblocks a pending read() so the thread can exit at once. */
-        fun interruptRecording() {
-            try { record?.stop() } catch (_: Throwable) {}
+        @Synchronized
+        fun feed(frame: ShortArray, rms: Double, startSample: Long) {
+            if (closed) return
+            if (pending.isEmpty()) pendingStart = startSample
+            pending += frame
+            if (pending.size < BLOCK_FRAMES) return
+            val block = ShortArray(pending.sumOf { it.size })
+            var pos = 0
+            for (f in pending) { f.copyInto(block, pos); pos += f.size }
+            pending.clear()
+            val start = pendingStart
+            when (gate.decide(SpeechCapture.rms(block))) {
+                SoundGate.Decision.SKIP -> {
+                    leadIn.addLast(start to block)
+                    while (leadIn.size > gate.preRollBlocks) leadIn.removeFirst()
+                }
+                SoundGate.Decision.OPEN -> {
+                    utteranceStart = leadIn.firstOrNull()?.first ?: start
+                    for ((_, b) in leadIn) accept(b)
+                    leadIn.clear()
+                    accept(block)
+                }
+                SoundGate.Decision.FEED -> accept(block)
+                SoundGate.Decision.CLOSE -> {
+                    accept(block)
+                    if (!closed) deliver(recognizer.finalResult) // finishes the phrase, resets for the next
+                    utteranceStart = -1L
+                }
+            }
+            PerfMeter.wakeDecodedShare = gate.decodedShare()
         }
 
-        @SuppressLint("MissingPermission") // only started when RECORD_AUDIO is granted
-        fun open(): Boolean {
-            val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-            if (minBuf <= 0) return false
-            val bufBytes = maxOf(minBuf, SAMPLE_RATE / 5 * 2)
-            for (source in listOf(MediaRecorder.AudioSource.VOICE_COMMUNICATION, MediaRecorder.AudioSource.VOICE_RECOGNITION)) {
-                val r = try {
-                    if (android.os.Build.VERSION.SDK_INT >= 30) {
-                        // Not "privacy sensitive": otherwise Android silences every other recorder
-                        // (the speech recogniser) while this one is open.
-                        AudioRecord.Builder()
-                            .setAudioSource(source)
-                            .setAudioFormat(AudioFormat.Builder().setSampleRate(SAMPLE_RATE).setChannelMask(AudioFormat.CHANNEL_IN_MONO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
-                            .setBufferSizeInBytes(bufBytes)
-                            .setPrivacySensitive(false)
-                            .build()
-                    } else {
-                        AudioRecord(source, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufBytes)
-                    }
-                } catch (_: Exception) { null }
-                if (r != null && r.state == AudioRecord.STATE_INITIALIZED) { record = r; break }
-                r?.release()
-            }
-            val r = record ?: return false
-            val applied = mutableListOf<String>()
-            if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(r.audioSessionId)?.let { it.enabled = true; effects += it; applied += "echo canceller" }
-            if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(r.audioSessionId)?.let { it.enabled = true; effects += it; applied += "noise suppressor" }
-            lastAudioEffects = if (applied.isEmpty()) "none available on this phone" else applied.joinToString(" + ")
-            return try {
-                recognizer = Recognizer(model, SAMPLE_RATE.toFloat(), matcher.grammarJson()).apply {
-                    setWords(true)
-                    setEndpointerMode(ENDPOINTER_SHORT) // decide sooner after the phrase ends
-                }
-                r.startRecording()
-                r.recordingState == AudioRecord.RECORDSTATE_RECORDING
-            } catch (e: Exception) {
-                closeAll()
-                false
-            }
-        }
-
-        private fun loop() {
-            val buf = ShortArray(SAMPLE_RATE / 10)
-            // Decode only when there is sound; quiet blocks are kept as lead-in.
-            val gate = SoundGate()
-            val leadIn = ArrayDeque<ShortArray>()
-            try {
-                while (running) {
-                    val n = record?.read(buf, 0, buf.size) ?: break
-                    if (n < 0) {
-                        if (running) main.post { if (session === this) { stop(); onError("Microphone error $n") } }
-                        break
-                    }
-                    val rec = recognizer ?: break
-                    if (n == 0) continue
-                    val block = buf.copyOf(n)
-                    when (gate.decide(SpeechCapture.rms(block))) {
-                        SoundGate.Decision.SKIP -> {
-                            leadIn.addLast(block)
-                            while (leadIn.size > gate.preRollBlocks) leadIn.removeFirst()
-                        }
-                        SoundGate.Decision.OPEN -> {
-                            for (b in leadIn) if (rec.acceptWaveForm(b, b.size)) deliver(rec.result)
-                            leadIn.clear()
-                            if (rec.acceptWaveForm(block, n)) deliver(rec.result)
-                        }
-                        SoundGate.Decision.FEED -> if (rec.acceptWaveForm(block, n)) deliver(rec.result)
-                        SoundGate.Decision.CLOSE -> {
-                            if (rec.acceptWaveForm(block, n)) deliver(rec.result)
-                            deliver(rec.finalResult) // finishes the phrase and resets for the next one
-                        }
-                    }
-                    PerfMeter.wakeDecodedShare = gate.decodedShare()
-                }
-            } catch (e: Throwable) {
-                if (running) main.post { if (session === this) { stop(); onError("Wake-word listening stopped: ${e.javaClass.simpleName}") } }
-            } finally {
-                closeAll()
-            }
+        private fun accept(block: ShortArray) {
+            if (!closed && recognizer.acceptWaveForm(block, block.size)) deliver(recognizer.result)
         }
 
         private fun deliver(result: String) {
             val wake = matcher.isWake(result)
             val abort = !wake && matcher.isAbort(result)
             if (!wake && !abort) return
+            val keptTalking = wake && matcher.wordsAfterWake(result) > 0
+            val from = utteranceStart
             main.post {
-                if (session !== this) return@post
-                if (wake) { stop(); onWake() } else onAbort()
+                if (decoder !== this) return@post
+                if (wake) onWake(keptTalking, from) else onAbort()
             }
         }
 
-        private fun closeAll() {
-            effects.forEach { try { it.release() } catch (_: Throwable) {} }
-            effects.clear()
-            try { record?.stop() } catch (_: Throwable) {}
-            try { record?.release() } catch (_: Throwable) {}
-            record = null
-            try { recognizer?.close() } catch (_: Throwable) {}
-            recognizer = null
+        @Synchronized
+        fun close() {
+            if (closed) return
+            closed = true
+            try { recognizer.close() } catch (_: Throwable) {}
         }
     }
 
@@ -443,7 +402,8 @@ class OfflineWakeWord(context: Context) {
     companion object {
         private const val TAG = "OfflineWakeWord"
         private const val SAMPLE_RATE = 16_000
-        private const val STOP_WAIT_MS = 400L
+        /** Three 30 ms frames per decoded block. */
+        private const val BLOCK_FRAMES = 3
         /** Vosk endpointer mode 1 = short pauses end an utterance (faster wake-up). */
         private const val ENDPOINTER_SHORT = 1
         private const val ASSET_DIR = "vosk-wake"
