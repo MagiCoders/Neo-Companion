@@ -202,6 +202,21 @@ class LiveConversation(
         VoiceLog.add(VoiceLog.Kind.WAKE, "Stopped her; listening")
     }
 
+    /**
+     * She handed over to another app (a video, a call, an app opened): end the session once her
+     * confirmation has been heard, so the other app's sound is never answered.
+     */
+    fun finishSoon(reason: String) {
+        if (!isActive()) return
+        if (player?.isPlaying == true || turnStarted) {
+            endAfterThisTurn = reason
+        } else {
+            VoiceLog.add(VoiceLog.Kind.WAKE, "Live conversation ends: $reason")
+            stop(reason)
+            main.post { callbacks.onEnded(reason) }
+        }
+    }
+
     fun stop(reason: String = "stopped") {
         if (_status.value == Status.IDLE) return
         _status.value = Status.IDLE

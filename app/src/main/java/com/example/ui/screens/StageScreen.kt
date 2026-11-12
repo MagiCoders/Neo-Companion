@@ -134,6 +134,10 @@ fun StageScreen(
     wakeWordEnabled: Boolean = false,
     voicePhase: com.example.ai.VoicePhase? = null,
     voiceLanguageLabel: String? = null,
+    /** Why listening is paused, in plain words. */
+    voicePauseReason: String = "",
+    /** What answered the last turn: "Live", "Cloud", "On phone", "Gemma". */
+    engineLabel: String = "",
     onPickVoiceLanguage: ((String) -> Unit)? = null,
     executedOrCancelledTurnIds: Set<String> = emptySet(),
     onCancelTurnAction: (String) -> Unit = {},
@@ -217,7 +221,7 @@ fun StageScreen(
 
             // Live Mood & Voice State Indicator Pill directly below character
             val stateBadgeText = when {
-                voicePhase == com.example.ai.VoicePhase.PAUSED -> "Paused: another app is using the mic"
+                voicePhase == com.example.ai.VoicePhase.PAUSED -> "Paused: " + voicePauseReason.ifBlank { "the microphone is busy" }
                 voicePhase == com.example.ai.VoicePhase.SPEAKING -> "Speaking"
                 isThinking || runtimeState is CharacterRuntimeState.Thinking -> "Thinking..."
                 isListeningMic || runtimeState is CharacterRuntimeState.Listening -> "Listening..."
@@ -257,6 +261,14 @@ fun StageScreen(
                     color = textPrimary,
                     modifier = Modifier.testTag("stage_mood_indicator")
                 )
+                if (engineLabel.isNotBlank()) {
+                    Text(
+                        text = engineLabel,
+                        style = MochiType.Label,
+                        color = textPrimary.copy(alpha = 0.6f),
+                        modifier = Modifier.testTag("stage_engine_label")
+                    )
+                }
                 if (voiceLanguageLabel != null && onPickVoiceLanguage != null) {
                     var menuOpen by remember { mutableStateOf(false) }
                     Box {

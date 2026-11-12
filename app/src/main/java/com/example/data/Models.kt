@@ -80,6 +80,8 @@ data class MochiPersistentSettings(
     val liveVoiceChat: Boolean = false,
     /** Live conversation (streaming voice) after her name; falls back to turn by turn on its own. */
     val liveMode: Boolean = true,
+    /** Settings → AI engine: "auto" (cloud, on-phone when offline), "cloud", or "phone" (Gemma + on-phone commands). */
+    val aiEngine: String = "auto",
     /** Hide the beep Android plays when the microphone opens and closes. */
     val silentListening: Boolean = true,
     val crashReports: Boolean = true,

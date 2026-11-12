@@ -162,6 +162,18 @@ class GemmaRunner(context: Context) {
         }
     }
 
+    /** One answer in a fresh conversation (the on-phone engine; the chat in the Lab is kept apart). */
+    suspend fun answerOnce(systemPrompt: String, text: String): String = withContext(dispatcher) {
+        val e = engine ?: throw IllegalStateException("Load a model first.")
+        val conv = e.createConversation(
+            ConversationConfig(
+                systemInstruction = Contents.of(systemPrompt),
+                samplerConfig = SamplerConfig(topK = 20, topP = 0.9, temperature = 0.4, seed = 0)
+            )
+        )
+        try { conv.sendMessage(text).toString() } finally { try { conv.close() } catch (_: Throwable) {} }
+    }
+
     suspend fun unload() = withContext(dispatcher) {
         closeAll()
         _state.value = State.Empty

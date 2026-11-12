@@ -2,6 +2,16 @@
 
 Every update gets a new version. Check yours in **Settings** (bottom of the screen): `MochiLife <version> (build <code>)`.
 
+## 3.0 (build 21)
+Listening over other apps, Live ends when she hands over, and a choice of AI engine.
+- She keeps listening when another app is on screen. Android only lets a background app use the microphone through a visible "microphone" service started while the app was still on screen; Mochi's started only as she left, too late when she opened YouTube herself. Her listening service now starts while the app is on screen and keeps running ("Mochi is listening · Stop listening" notification); the floating bubble is only shown or hidden as you leave or return. If the microphone was refused earlier (permission granted later), opening the app asks again.
+- Pause messages tell the real reason: a call is in progress, another app is recording (system "Hey Google"/Bixby helpers don't count), Mochi is in the background without her listening service, or Android paused her microphone. The old message always blamed "another app".
+- A Live conversation ends after she has confirmed an action that opens another app or starts media (video, call, music), so a video's sound is never answered ("Avanza…" in the 2.9 log). Her name starts a new conversation.
+- AI engine (Settings): Automatic (cloud when online, on the phone when offline), Cloud, or On this phone. "On this phone" answers with Gemma (downloaded in Gemma Lab, loaded on first use), turn by turn: the phone turns speech into text, Gemma replies, any action goes through the same checks and countdown, and the phone's voice speaks. Calls, WhatsApp calls, opening apps, YouTube and reading messages work through Gemma; alarms, timers and the time are handled by the on-phone commands as before.
+- The home screen shows what answered the last turn: Live, Cloud, On phone (commands) or Gemma.
+- Offline, she uses the phone's voice at once instead of waiting for the natural voice to time out.
+- Performance: the 19.7% CPU in the 2.9 log was measured while a video played; most of it is the wake listener decoding the video's sound to catch her name (67% of the time). That is the cost of hearing her name over media; it stops when the video stops. Not changed in this version.
+
 ## 2.9 (build 20)
 She can no longer answer herself, and Live conversation is back as the fast mode.
 - Rule, enforced in code: her voice can never become a request. No request is recorded while her voice plays (any attempt is refused and logged), and in Live mode the microphone is not sent to the AI at all while she speaks. Only her name, "stop" or a tap interrupt her. The loudness-based "talk over her" from 2.7, which mistook her own voice for you, is removed.

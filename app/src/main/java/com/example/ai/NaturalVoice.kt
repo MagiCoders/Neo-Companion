@@ -45,6 +45,7 @@ object NaturalVoice {
     private const val KEEP_UP_TO_CHARS = 80
     @Volatile private var restingUntil = 0L
     @Volatile private var cacheDir: File? = null
+    @Volatile private var appContext: Context? = null
 
     private val models = ConcurrentHashMap<String, GenerativeModel>()
     private val memory = object : LinkedHashMap<String, Audio>(MEMORY_LINES, 0.75f, true) {
@@ -56,6 +57,7 @@ object NaturalVoice {
     /** Call once with the app context so short lines survive restarts. */
     fun init(context: Context) {
         if (cacheDir == null) cacheDir = File(context.filesDir, "voice_lines").apply { mkdirs() }
+        if (appContext == null) appContext = context.applicationContext
     }
 
     private fun model(voice: String) = models.getOrPut(voice) {
@@ -89,6 +91,8 @@ object NaturalVoice {
             return@flow
         }
         if (System.currentTimeMillis() < restingUntil) return@flow
+        // Offline: use the phone's own voice at once instead of waiting for a timeout.
+        appContext?.let { if (!NetworkState.isOnline(it)) return@flow }
         val voice = voiceFor(character)
         val started = System.currentTimeMillis()
         val all = ArrayList<ShortArray>()

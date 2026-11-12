@@ -60,3 +60,24 @@ class GemmaAndVoiceTest {
         assertEquals(16, GemmaBench.CASES.size)
     }
 }
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
+class GemmaEngineTest {
+    @Test
+    fun `gemma answers are turned into a reply and a checked action`() {
+        val (reply, type, target) = com.example.ai.gemma.GemmaEngine.parse("{\"reply\":\"Calling Ali now.\",\"action\":\"CALL\",\"target\":\"Ali\"}")
+        assertEquals("Calling Ali now.", reply)
+        assertEquals(com.example.data.CompanionActionType.SIM_CALL, type)
+        assertEquals("Ali", target)
+        val chat = com.example.ai.gemma.GemmaEngine.parse("```json\n{\"reply\":\"شلونك؟\",\"action\":\"NONE\",\"target\":\"\"}\n```")
+        assertEquals("شلونك؟", chat.first)
+        assertEquals(com.example.data.CompanionActionType.NONE, chat.second)
+        // Plain text instead of JSON: spoken as it is, no action.
+        val plain = com.example.ai.gemma.GemmaEngine.parse("Sure, here you go!")
+        assertEquals("Sure, here you go!", plain.first)
+        assertEquals(com.example.data.CompanionActionType.NONE, plain.second)
+        // Unknown actions never run.
+        assertEquals(com.example.data.CompanionActionType.NONE, com.example.ai.gemma.GemmaEngine.parse("{\"reply\":\"ok\",\"action\":\"DELETE_FILES\"}").second)
+    }
+}

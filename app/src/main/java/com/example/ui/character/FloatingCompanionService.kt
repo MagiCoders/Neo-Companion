@@ -172,30 +172,54 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
             }
         }
 
-        voice.bindCallbacks(
-            owner = OWNER,
-            onCommandRecognized = { command -> handlePrompt(command) },
-            onExecutePendingAction = { pending -> executeAction(pending) },
-            onAudioCaptured = { wav -> handlePrompt("", wav) }
-        )
+        instance = this
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            com.example.ai.VoiceLog.add(com.example.ai.VoiceLog.Kind.WAKE, "Listening stopped from the notification")
             stopSelf()
             return START_NOT_STICKY
         }
         intent?.getStringExtra(EXTRA_CHARACTER_ID)?.let { activeCharacter = CharacterSpec.fromId(it) }
-        intent?.getStringExtra(EXTRA_LAST_MESSAGE)?.takeIf { it.isNotBlank() }?.let { showBubble(it, 5_000L) }
-
-        if (Settings.canDrawOverlays(this)) {
-            attachOverlayWindowIfNeeded()
-            lifecycleRegistry.currentState = Lifecycle.State.RESUMED
-        } else {
-            stopSelf()
+        // Started again from the app (on screen): if the microphone was refused before (permission
+        // granted since), ask for it again now that Android allows it.
+        if (!micHostAcquired) startForegroundCompat()
+        when (intent?.action) {
+            ACTION_HIDE_WINDOW -> setWindowShown(false)
+            else -> {
+                intent?.getStringExtra(EXTRA_LAST_MESSAGE)?.takeIf { it.isNotBlank() }?.let { showBubble(it, 5_000L) }
+                setWindowShown(true)
+            }
         }
         // Not sticky: a system restart in the background could not use the mic anyway.
         return START_NOT_STICKY
+    }
+
+    /**
+     * The floating bubble is shown while the app is not on screen and hidden while it is; the
+     * service itself (and with it the right to use the microphone) keeps running either way.
+     */
+    fun setWindowShown(shown: Boolean) {
+        val allowed = shown && Settings.canDrawOverlays(this) &&
+            getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("floatingCompanionEnabled", true)
+        if (allowed) {
+            attachOverlayWindowIfNeeded()
+            lifecycleRegistry.currentState = Lifecycle.State.RESUMED
+            // While she floats, spoken turns are answered here.
+            voice.bindCallbacks(
+                owner = OWNER,
+                onCommandRecognized = { command -> handlePrompt(command) },
+                onExecutePendingAction = { pending -> executeAction(pending) },
+                onAudioCaptured = { wav -> handlePrompt("", wav) }
+            )
+        } else {
+            voice.unbindCallbacks(OWNER)
+            hideDismissTarget()
+            try { composeView?.let { windowManager?.removeView(it) } } catch (_: Throwable) {}
+            composeView = null
+            if (lifecycleRegistry.currentState.isAtLeast(Lifecycle.State.STARTED)) lifecycleRegistry.currentState = Lifecycle.State.CREATED
+        }
     }
 
     // ------------------------------------------------------------------------------------------
@@ -222,13 +246,14 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val firstName = activeCharacter.displayName.substringAfter(" ")
+        val wakeOn = getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("wakeWordEnabled", false)
         val notification: Notification = NotificationCompat.Builder(this, channelId)
-            .setContentTitle("$firstName is floating")
-            .setContentText("Tap her to talk · hold for quick ask")
+            .setContentTitle(if (wakeOn) "$firstName is listening" else "$firstName is ready")
+            .setContentText(if (wakeOn) "Say her name anytime, also over other apps" else "Tap her bubble to talk, also over other apps")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentIntent(openIntent)
             .addAction(0, "Open app", openIntent)
-            .addAction(0, "Hide", hideIntent)
+            .addAction(0, "Stop listening", hideIntent)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
@@ -247,6 +272,7 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
             } catch (e: Exception) {
                 // Started from the background, or mic not allowed right now: float without voice.
                 Log.w(TAG, "Microphone foreground type refused: ${e.message}")
+                com.example.ai.VoiceLog.add(com.example.ai.VoiceLog.Kind.ERROR, "Android refused background listening: ${e.javaClass.simpleName}. Open the app once to allow it.")
             }
         }
         if (!micHostAcquired) {
@@ -261,6 +287,7 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
         if (micHostAcquired || Build.VERSION.SDK_INT < 30) {
             micHostAcquired = true
             voice.acquireHost(OWNER)
+            voice.setBackgroundListening(true)
         }
     }
 
@@ -655,9 +682,10 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
     }
 
     override fun onDestroy() {
+        if (instance === this) instance = null
         hideDismissTarget()
         voice.unbindCallbacks(OWNER)
-        if (micHostAcquired) voice.releaseHost(OWNER)
+        if (micHostAcquired) { voice.setBackgroundListening(false); voice.releaseHost(OWNER) }
         bubbleHideJob?.cancel()
         try {
             composeView?.let { windowManager?.removeView(it) }
@@ -683,6 +711,44 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
         private const val PREFS = "mochi_persistent_settings"
         private const val NOTIFICATION_ID = 4409
         const val ACTION_STOP = "com.example.action.STOP_FLOATING_COMPANION"
+        const val ACTION_HIDE_WINDOW = "com.example.action.HIDE_FLOATING_WINDOW"
+        @Volatile private var instance: FloatingCompanionService? = null
+
+        /**
+         * Starts Mochi's listening service while the app is on screen (Android only grants a
+         * background microphone to a service started from the foreground). The bubble stays
+         * hidden until the user leaves the app. Call from the activity (onStart / onResume).
+         */
+        fun ensureRunning(context: Context) {
+            val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val voiceOn = prefs.getBoolean("wakeWordEnabled", false) || prefs.getBoolean("floatingCompanionEnabled", true)
+            if (!voiceOn) return
+            val micGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+            if (!micGranted && !Settings.canDrawOverlays(context)) return
+            val running = instance
+            if (running != null && running.micHostAcquired) { running.setWindowShown(false); return }
+            val character = CharacterSpec.fromId(prefs.getString("selectedCharacterId", null) ?: CharacterSpec.MOCHI.id)
+            try {
+                ContextCompat.startForegroundService(
+                    context,
+                    Intent(context, FloatingCompanionService::class.java)
+                        .setAction(ACTION_HIDE_WINDOW)
+                        .putExtra(EXTRA_CHARACTER_ID, character.id)
+                )
+            } catch (e: Throwable) {
+                Log.w(TAG, "Could not start the listening service: ${e.message}")
+            }
+        }
+
+        /** The user left the app (or an action opened another app): show the floating bubble. */
+        fun showWindowIfEnabled(context: Context) {
+            val running = instance
+            if (running != null) { running.setWindowShown(true); return }
+            startIfEnabled(context)
+        }
+
+        /** Back in the app: hide the bubble, keep listening. */
+        fun hideWindow() { instance?.setWindowShown(false) }
         const val EXTRA_CHARACTER_ID = "extra_character_id"
         const val EXTRA_LAST_MESSAGE = "extra_last_message"
 

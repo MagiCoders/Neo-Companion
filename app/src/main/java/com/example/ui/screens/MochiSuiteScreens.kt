@@ -825,6 +825,33 @@ fun ProfileAndSettingsScreen(
                 onCheckedChange = { enabled -> onUpdateSettings { it.copy(liveMode = enabled) } }
             )
             HairlineDivider(p.hairline)
+            Column(modifier = Modifier.fillMaxWidth().padding(vertical = MochiSpacing.sm), verticalArrangement = Arrangement.spacedBy(MochiSpacing.xs)) {
+                Text("AI engine", style = MochiType.Body.copy(fontWeight = FontWeight.SemiBold), color = p.textPrimary)
+                Text(
+                    when (settings.aiEngine) {
+                        "cloud" -> "Cloud: Gemini answers (Live when on). Needs internet."
+                        "phone" -> "On this phone: Gemma answers offline, turn by turn, with the phone's voice. Download it in Gemma Lab first."
+                        else -> "Automatic: cloud when online, Gemma on the phone when offline."
+                    },
+                    style = MochiType.Label, color = p.textTertiary
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(MochiSpacing.xs)) {
+                    listOf("auto" to "Automatic", "cloud" to "Cloud", "phone" to "On this phone").forEach { (value, label) ->
+                        val selected = settings.aiEngine == value
+                        Text(
+                            label,
+                            style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold),
+                            color = if (selected) androidx.compose.ui.graphics.Color.White else p.textPrimary,
+                            modifier = Modifier
+                                .clip(androidx.compose.foundation.shape.RoundedCornerShape(50))
+                                .background(if (selected) accent else accent.copy(alpha = 0.12f))
+                                .clickable { onUpdateSettings { it.copy(aiEngine = value) } }
+                                .padding(horizontal = 14.dp, vertical = 8.dp)
+                        )
+                    }
+                }
+            }
+            HairlineDivider(p.hairline)
             SettingsIconToggleRow(
                 icon = Icons.Outlined.Language,
                 title = "Send crash reports",

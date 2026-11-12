@@ -162,9 +162,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        // Back in the app: the in-app companion takes over from the floating one.
-        FloatingCompanionService.stopSystemOverlay(this)
+        // Back in the app: the in-app companion takes over from the floating one. The listening
+        // service keeps running (started now, while on screen, so Android lets it use the mic
+        // in the background later); only its bubble is hidden.
         voice.acquireHost("activity")
+        FloatingCompanionService.ensureRunning(this)
     }
 
     override fun onResume() {
@@ -173,6 +175,8 @@ class MainActivity : ComponentActivity() {
             ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
                 PackageManager.PERMISSION_GRANTED
         )
+        // The microphone permission may have just been granted: (re)start listening for later.
+        FloatingCompanionService.ensureRunning(this)
     }
 
     /**
@@ -183,7 +187,7 @@ class MainActivity : ComponentActivity() {
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         if (FirebaseAuth.getInstance().currentUser != null) {
-            FloatingCompanionService.startIfEnabled(this)
+            FloatingCompanionService.showWindowIfEnabled(this)
         }
     }
 
@@ -352,6 +356,8 @@ fun MochiAppHost(
     val isWakeWordListeningActive by viewModel.isWakeWordListeningActive.collectAsStateWithLifecycle()
     val livePartialTranscript by viewModel.liveVoicePartialTranscript.collectAsStateWithLifecycle()
     val voicePhase by viewModel.voicePhase.collectAsStateWithLifecycle()
+    val voicePauseReason by viewModel.voicePauseReason.collectAsStateWithLifecycle()
+    val lastEngine by viewModel.lastEngine.collectAsStateWithLifecycle()
     val liveStatus by viewModel.liveStatus.collectAsStateWithLifecycle()
     val libraryEntries by viewModel.libraryEntries.collectAsStateWithLifecycle()
     val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
@@ -578,6 +584,8 @@ fun MochiAppHost(
                             moodToneLabel = currentMoodTone,
                             wakeWordEnabled = settings.wakeWordEnabled,
                             voicePhase = voicePhase,
+                            voicePauseReason = voicePauseReason,
+                            engineLabel = lastEngine,
                             voiceLanguageLabel = viewModel.voiceLanguageChip(settings.preferredLanguage),
                             onPickVoiceLanguage = { code -> viewModel.pickVoiceLanguage(code) },
                             executedOrCancelledTurnIds = executedOrCancelledTurnIds,

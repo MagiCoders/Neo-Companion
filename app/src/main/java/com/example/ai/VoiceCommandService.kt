@@ -65,6 +65,9 @@ class VoiceCommandService(
     private val scope: CoroutineScope
 ) {
     companion object {
+        /** MediaRecorder.AudioSource.HOTWORD (system wake-word helpers); not a public constant. */
+        private const val HOTWORD_SOURCE = 1999
+
         /** The last recording sent to the AI (overwritten each turn, never uploaded anywhere else). */
         fun lastHeardFile(context: Context): java.io.File = java.io.File(context.cacheDir, "last_heard.wav")
 
@@ -214,6 +217,18 @@ class VoiceCommandService(
      */
     private val micContention = MicContention()
     private var pausedForCall = false
+    /** Mochi's listening service is running with the microphone (so background listening is allowed). */
+    @Volatile private var backgroundListening = false
+    private val _pauseReason = MutableStateFlow("")
+    /** Why listening is paused right now, in plain words ("" when not paused). */
+    val pauseReason: StateFlow<String> = _pauseReason.asStateFlow()
+
+    fun setBackgroundListening(on: Boolean) { backgroundListening = on }
+
+    /** Another app (not a background hotword helper such as "Hey Google") is recording. */
+    private fun otherAppRecording(mine: Set<Int>): Boolean = Build.VERSION.SDK_INT >= 29 && try {
+        audioManager.activeRecordingConfigurations.any { it.clientAudioSessionId !in mine && it.clientAudioSource != HOTWORD_SOURCE }
+    } catch (_: Throwable) { false }
 
     private fun ownSessionIds(): Set<Int> =
         setOf(hub.sessionId) - (-1)
@@ -230,6 +245,7 @@ class VoiceCommandService(
             MicContention.State.CALL -> {
                 otherAppUsingMic = true
                 pausedForCall = true
+                _pauseReason.value = "a call is in progress"
                 VoiceLog.add(VoiceLog.Kind.IGNORED, "Paused: a call is in progress (audio mode $mode)")
                 endConversation("a call started")
                 if (sessionKind != null) cancelSession(destroy = false)
@@ -237,11 +253,20 @@ class VoiceCommandService(
             MicContention.State.SILENCED -> {
                 otherAppUsingMic = true
                 pausedForCall = false
-                VoiceLog.add(VoiceLog.Kind.IGNORED, "Paused: Android gave the microphone to another app (her recorder ${mine.joinToString()} silenced)")
+                val inApp = "activity" in hosts
+                val reason = when {
+                    !inApp && !backgroundListening -> "Mochi is in the background without her listening service (open the app once)"
+                    otherAppRecording(mine) -> "another app is recording"
+                    else -> "Android paused her microphone"
+                }
+                _pauseReason.value = reason
+                VoiceLog.add(VoiceLog.Kind.IGNORED, "Paused: $reason (her recorder ${mine.joinToString()} silenced; " +
+                    (if (inApp) "app on screen" else if (backgroundListening) "listening service on" else "listening service off") + ")")
                 endConversation("another app needs the mic")
                 if (sessionKind == SessionKind.COMMAND) cancelSession(destroy = false)
             }
             MicContention.State.FREE -> {
+                _pauseReason.value = ""
                 otherAppUsingMic = false
                 pausedForCall = false
                 VoiceLog.add(VoiceLog.Kind.WAKE, "Microphone is hers again, listening resumed")
@@ -423,8 +448,14 @@ class VoiceCommandService(
         VoiceLog.add(VoiceLog.Kind.ERROR, "AI listening paused for $minutes min; using the phone's speech recogniser")
     }
 
+    /** Settings → AI engine: "auto", "cloud" or "phone". */
+    @Volatile var engineMode = "auto"
+
+    /** Answers come from the phone (Gemma or on-phone commands): no cloud listening, no Live. */
+    fun phoneOnlyNow(): Boolean = engineMode == "phone" || (engineMode == "auto" && !NetworkState.isOnline(appContext))
+
     private fun useAiListening(): Boolean =
-        aiListening && onAudioCallback != null && System.currentTimeMillis() >= phoneRecognizerUntil
+        aiListening && onAudioCallback != null && System.currentTimeMillis() >= phoneRecognizerUntil && !phoneOnlyNow()
 
     private val onExecutePendingActionCallback: ((PendingVoiceAction) -> Unit)?
         get() = pendingExecuteOverride ?: callbackStack.lastOrNull()?.second?.onExecutePending
@@ -915,12 +946,12 @@ class VoiceCommandService(
         val kept = keptTalking && utteranceStart >= 0
         val from = if (kept) utteranceStart else hub.samplesRecorded
         val live = onWakeLive
-        if (useLive && live != null) {
+        if (useLive && live != null && !phoneOnlyNow()) {
             livePending = true
             live(kept, from)
             return
         }
-        startCapture(seedFrom = from)
+        if (useAiListening()) startCapture(seedFrom = from) else startSession(SessionKind.COMMAND)
         onWakeWordOnly?.invoke(kept)
     }
 
@@ -937,8 +968,9 @@ class VoiceCommandService(
         }
         if (liveActive || livePending) return
         if (otherAppUsingMic) {
-            VoiceLog.add(VoiceLog.Kind.IGNORED, "Not listening: another app has the microphone right now")
-            _lastError.value = "Another app is using the microphone right now. Try again when it's done."
+            val why = _pauseReason.value.ifBlank { "the microphone is paused" }
+            VoiceLog.add(VoiceLog.Kind.IGNORED, "Not listening: $why")
+            _lastError.value = "I can't listen right now: $why."
             return
         }
         if (sessionKind != null) cancelSession(destroy = false)

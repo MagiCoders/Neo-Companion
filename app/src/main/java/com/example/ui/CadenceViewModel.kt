@@ -67,6 +67,7 @@ class CadenceViewModel(
     val pendingVoiceAction: StateFlow<PendingVoiceAction?> = voiceCommandService.pendingAction
     val isWakeWordListeningActive: StateFlow<Boolean> = voiceCommandService.isActivelyListening
     val voicePhase: StateFlow<com.example.ai.VoicePhase> = voiceCommandService.phase
+    val voicePauseReason: StateFlow<String> = voiceCommandService.pauseReason
     val liveVoicePartialTranscript: StateFlow<String> = voiceCommandService.livePartialTranscript
 
     // --- HashRouter Navigation State Management ---
@@ -138,6 +139,7 @@ class CadenceViewModel(
             wakePhrase = prefs.getString("wakePhrase", com.example.ai.WakePhrases.DEFAULT) ?: com.example.ai.WakePhrases.DEFAULT,
             liveVoiceChat = prefs.getBoolean("liveVoiceChat", false),
             liveMode = prefs.getBoolean("liveMode", true),
+            aiEngine = prefs.getString("aiEngine", "auto") ?: "auto",
             crashReports = prefs.getBoolean("crashReports", true),
             silentListening = prefs.getBoolean("silentListening", true),
             aiListening = prefs.getBoolean("aiListening", true),
@@ -237,7 +239,8 @@ class CadenceViewModel(
         voiceCommandService.setWakePhrase(s.wakePhrase)
         voiceCommandService.setSilentListening(s.silentListening)
         voiceCommandService.setAiListening(s.aiListening)
-        voiceCommandService.useLive = s.liveMode
+        voiceCommandService.useLive = s.liveMode && s.aiEngine != "phone"
+        voiceCommandService.engineMode = s.aiEngine
         com.example.ai.NaturalVoice.enabled = s.naturalVoice
         characterController.defaultLanguageTag = tag
     }
@@ -254,6 +257,7 @@ class CadenceViewModel(
             .putString("wakePhrase", updated.wakePhrase)
             .putBoolean("liveVoiceChat", updated.liveVoiceChat)
             .putBoolean("liveMode", updated.liveMode)
+            .putString("aiEngine", updated.aiEngine)
             .putBoolean("crashReports", updated.crashReports)
             .putBoolean("silentListening", updated.silentListening)
             .putBoolean("aiListening", updated.aiListening)
@@ -273,6 +277,9 @@ class CadenceViewModel(
             .putInt("themeMode", updated.themeMode)
             .putStringSet("allowedPermissions", updated.allowedPermissions)
             .apply()
+        // The listening service runs while voice is on, and stops when both are switched off.
+        if (!updated.wakeWordEnabled && !updated.floatingCompanionEnabled) FloatingCompanionService.stopSystemOverlay(appContext)
+        else FloatingCompanionService.ensureRunning(appContext)
     }
 
     fun togglePermissionAllowed(permissionTitle: String) {
@@ -436,7 +443,9 @@ class CadenceViewModel(
                 voiceCommandService.stopListening()
             }
             // Otherwise the conversation carries on from the floating companion.
-            if (_settings.value.floatingCompanionEnabled) FloatingCompanionService.startIfEnabled(context)
+            if (_settings.value.floatingCompanionEnabled) FloatingCompanionService.showWindowIfEnabled(context)
+            // A Live conversation ends once she has confirmed, so a video's sound is never answered.
+            if (liveConversation.isActive()) liveConversation.finishSoon("${turn.actionType.label} opened")
         }
         reportOutcome(context, tts, outcome)
     }
@@ -472,6 +481,7 @@ class CadenceViewModel(
         }
 
         override fun onCompanionTranscript(text: String) {
+            _lastEngine.value = "Live"
             _chatHistory.value = _chatHistory.value + CompanionChatTurn(id = UUID.randomUUID().toString(), senderIsUser = false, message = text)
         }
 
@@ -1151,8 +1161,23 @@ class CadenceViewModel(
                 // if the check passes. Offline/Firestore hiccups must not block chatting.
                 var aiTurn: CompanionChatTurn = if (localTurn != null) {
                     com.example.ai.VoiceLog.add(com.example.ai.VoiceLog.Kind.AI, "Understood on the phone (no AI used): ${localTurn.actionType.label}")
+                    _lastEngine.value = "On phone"
                     localTurn
+                } else if (voiceCommandService.phoneOnlyNow()) {
+                    // AI engine "On this phone" (or Automatic with no internet): Gemma answers.
+                    val lang = com.example.ai.VoiceLanguages.promptName(com.example.ai.VoiceLanguages.tagFor(_settings.value.preferredLanguage))
+                    when (val r = com.example.ai.gemma.GemmaEngine.answer(appContext, clean, activeChar.displayName, lang, history)) {
+                        is com.example.ai.gemma.GemmaEngine.Result.Answer -> { _lastEngine.value = "Gemma"; r.turn }
+                        is com.example.ai.gemma.GemmaEngine.Result.Unavailable -> {
+                            reportOutcome(context, tts, ActionOutcome.Failed(
+                                if (_settings.value.aiEngine == "auto") "I'm offline. ${r.reason}" else r.reason
+                            ))
+                            characterController.transitionTo(CharacterRuntimeState.Idle)
+                            return@launch
+                        }
+                    }
                 } else {
+                _lastEngine.value = "Cloud"
                 val creditCheck = async {
                     uid == null || _userProfile.value.userId != uid ||
                         runCatching { repository.consumeAiCreditOrThrow(uid, _userProfile.value) }.getOrDefault(true)
@@ -1290,6 +1315,10 @@ class CadenceViewModel(
      */
     private var audioTurnJob: kotlinx.coroutines.Job? = null
 
+    /** What answered the last turn ("Live", "Cloud", "On phone", "Gemma"), shown on the home screen. */
+    private val _lastEngine = MutableStateFlow("")
+    val lastEngine: StateFlow<String> = _lastEngine.asStateFlow()
+
     fun sendAudioToMochi(context: Context, tts: TextToSpeech?, wav: ByteArray) {
         // A new request replaces one still being answered (the user talked over her).
         audioTurnJob?.cancel()
@@ -1324,6 +1353,7 @@ class CadenceViewModel(
                     characterController.transitionTo(CharacterRuntimeState.Listening)
                     return@launch
                 }
+                _lastEngine.value = "Cloud"
                 val (heard, turn) = result.getOrElse { e ->
                     if (e is kotlinx.coroutines.CancellationException) throw e
                     if (com.example.ai.AiDiagnostics.classify(e.cause ?: e) == com.example.ai.AiDiagnostics.Reason.QUOTA) {
