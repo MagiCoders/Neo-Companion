@@ -53,6 +53,10 @@ class GemmaAndVoiceTest {
         assertTrue(GemmaBench.score(call, "Sure! ```json\n{\"action\": \"call\", \"target\": \"Brother\"}\n```", 1.0).passed)
         assertFalse(GemmaBench.score(call, "{\"action\":\"WHATSAPP_CALL\",\"target\":\"brother\"}", 1.0).passed)
         assertFalse(GemmaBench.score(call, "I will call your brother.", 1.0).passed)
+        val spotify = GemmaBench.CASES.first { it.target == "spotify" }
+        val partial = GemmaBench.score(spotify, "{\"action\":\"OPEN_APP\",\"target\":\"\"}", 1.0)
+        assertFalse(partial.passed)
+        assertTrue(partial.understood)
         assertEquals(16, GemmaBench.CASES.size)
     }
 }

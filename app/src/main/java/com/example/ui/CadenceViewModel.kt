@@ -137,6 +137,8 @@ class CadenceViewModel(
             wakeWordEnabled = prefs.getBoolean("wakeWordEnabled", false),
             wakePhrase = prefs.getString("wakePhrase", com.example.ai.WakePhrases.DEFAULT) ?: com.example.ai.WakePhrases.DEFAULT,
             liveVoiceChat = prefs.getBoolean("liveVoiceChat", false),
+            liveMode = prefs.getBoolean("liveMode", true),
+            crashReports = prefs.getBoolean("crashReports", true),
             silentListening = prefs.getBoolean("silentListening", true),
             aiListening = prefs.getBoolean("aiListening", true),
             naturalVoice = prefs.getBoolean("naturalVoice", true),
@@ -235,6 +237,7 @@ class CadenceViewModel(
         voiceCommandService.setWakePhrase(s.wakePhrase)
         voiceCommandService.setSilentListening(s.silentListening)
         voiceCommandService.setAiListening(s.aiListening)
+        voiceCommandService.useLive = s.liveMode
         com.example.ai.NaturalVoice.enabled = s.naturalVoice
         characterController.defaultLanguageTag = tag
     }
@@ -250,6 +253,8 @@ class CadenceViewModel(
         prefs.edit()
             .putString("wakePhrase", updated.wakePhrase)
             .putBoolean("liveVoiceChat", updated.liveVoiceChat)
+            .putBoolean("liveMode", updated.liveMode)
+            .putBoolean("crashReports", updated.crashReports)
             .putBoolean("silentListening", updated.silentListening)
             .putBoolean("aiListening", updated.aiListening)
             .putBoolean("naturalVoice", updated.naturalVoice)
@@ -487,28 +492,54 @@ class CadenceViewModel(
         override fun onError(message: String) {
             reportOutcome(appContext, null, ActionOutcome.Failed(message))
         }
+
+        override fun onFallback(reason: String, seedFrom: Long) {
+            // Live can't serve this conversation: continue turn by turn without losing what was said.
+            characterController.transitionTo(CharacterRuntimeState.Listening)
+            voiceCommandService.listenNow(if (seedFrom >= 0) seedFrom else voiceCommandService.micPosition)
+        }
+
+        override fun onEnded(reason: String) {
+            voiceCommandService.endConversation(reason)
+            characterController.transitionTo(CharacterRuntimeState.Idle)
+        }
     })
     val liveStatus: StateFlow<com.example.ai.LiveConversation.Status> = liveConversation.status
 
     /** Mic button: start or end a live voice conversation. */
+    /** Mic button during a Live conversation ends it; otherwise starts one. */
     fun toggleLiveConversation() {
         if (liveConversation.isActive()) {
-            liveConversation.stop()
-            voiceCommandService.setLiveCallActive(false)
+            liveConversation.stop("tap")
+            voiceCommandService.endConversation("tap")
             characterController.transitionTo(CharacterRuntimeState.Idle)
             return
         }
+        startLiveConversation(seedFrom = -1L)
+    }
+
+    /** Opens a Live conversation on the shared microphone (after her name, or a tap). */
+    private fun startLiveConversation(seedFrom: Long) {
+        voiceCommandService.liveStarting()
         val uid = _currentUserId.value
         viewModelScope.launch {
             val hasCredit = uid == null || _userProfile.value.userId != uid ||
                 runCatching { repository.consumeAiCreditOrThrow(uid, _userProfile.value) }.getOrDefault(true)
             if (!hasCredit) {
+                voiceCommandService.endLive("no energy")
                 reportOutcome(appContext, null, ActionOutcome.Failed("You've used today's AI energy. It refills tomorrow, or you can go Pro in Wallet."))
                 return@launch
             }
-            voiceCommandService.setLiveCallActive(true)
+            voiceCommandService.startConversation()
             characterController.transitionTo(CharacterRuntimeState.Listening)
-            liveConversation.start(_selectedCharacter.value, _settings.value.userName)
+            val tag = com.example.ai.VoiceLanguages.tagFor(_settings.value.preferredLanguage)
+            liveConversation.start(
+                _selectedCharacter.value,
+                _settings.value.userName,
+                com.example.ai.VoiceLanguages.promptName(tag),
+                voiceCommandService,
+                seedFrom
+            )
         }
     }
 
@@ -527,6 +558,18 @@ class CadenceViewModel(
             if (tts != null) characterController.speakWithLipSync(appContext, tts, idleLine(idle), _selectedCharacter.value)
             else if (idle != VoiceCommandService.Idle.GOODBYE) voiceCommandService.startPersistentListeningLoop(forceImmediateCommandCapture = true)
         }
+        // Live conversation (Settings): her name opens a Live session on the shared microphone.
+        voiceCommandService.onWakeLive = { keptTalking, seedFrom ->
+            val tts = speechEngine
+            val tag = java.util.Locale.forLanguageTag(com.example.ai.VoiceLanguages.tagFor(_settings.value.preferredLanguage)).toLanguageTag()
+            val greeting = WAKE_ANSWER[tag.substringBefore('-')]
+            // Her one-word answer plays while the connection opens (it is kept on the phone, so instant).
+            if (!keptTalking && tts != null && greeting != null && com.example.ai.NaturalVoice.isReady(greeting, tag, _selectedCharacter.value)) {
+                characterController.speakWithLipSync(appContext, tts, greeting, _selectedCharacter.value, tag)
+            }
+            startLiveConversation(seedFrom = if (keptTalking) seedFrom else -1L)
+        }
+        voiceCommandService.onLiveInterrupt = { liveConversation.interrupt() }
         // Her name was heard and the request recorder is already running on the same microphone.
         voiceCommandService.onWakeWordOnly = { keptTalking ->
             voiceCommandService.startConversation()
@@ -574,16 +617,16 @@ class CadenceViewModel(
 
     /** Mic button: one spoken turn by default; a live call when "Live voice chat" is on (or one is running). */
     fun onMicButton(hasRecordPermission: Boolean) {
-        // Live voice chat is hidden until it is rebuilt on the one-microphone design.
-        if (liveConversation.isActive()) toggleLiveConversation()
+        if (liveConversation.isActive() || (_settings.value.liveMode && hasRecordPermission)) toggleLiveConversation()
         else voiceCommandService.triggerManualMicSession(hasRecordPermission)
     }
 
     override fun onCleared() {
         voiceCommandService.onWakeWordOnly = null
+        voiceCommandService.onWakeLive = null
+        voiceCommandService.onLiveInterrupt = null
         voiceCommandService.onConversationIdle = null
-        liveConversation.stop()
-        voiceCommandService.setLiveCallActive(false)
+        liveConversation.stop("app closed")
         super.onCleared()
     }
 

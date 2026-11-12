@@ -814,7 +814,16 @@ fun ProfileAndSettingsScreen(
                 palette = p,
                 onCheckedChange = { enabled -> onUpdateSettings { it.copy(silentListening = enabled) } }
             )
-            // "Live voice chat" is hidden until it is rebuilt on the one-microphone design (2.7).
+            HairlineDivider(p.hairline)
+            SettingsIconToggleRow(
+                icon = Icons.Outlined.Language,
+                title = "Live conversation",
+                subtitle = "Fastest replies: she starts talking while she thinks. If the service is slow, she switches to turn by turn by herself.",
+                checked = settings.liveMode,
+                accent = accent,
+                palette = p,
+                onCheckedChange = { enabled -> onUpdateSettings { it.copy(liveMode = enabled) } }
+            )
             HairlineDivider(p.hairline)
             SettingsIconToggleRow(
                 icon = Icons.Outlined.Language,
@@ -3064,6 +3073,34 @@ private fun DiagnosticsCard(p: SuitePalette) {
             val timeFormat = remember { java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.ROOT) }
             voiceLog.takeLast(25).forEach { e ->
                 Text("${timeFormat.format(java.util.Date(e.atMillis))}  ${e.kind.name.lowercase()}  ${e.text}", style = MochiType.Label, color = p.textTertiary)
+            }
+            val checkScope = androidx.compose.runtime.rememberCoroutineScope()
+            var checkLines by remember { mutableStateOf<List<com.example.ai.VoiceCheck.Line>>(emptyList()) }
+            var checking by remember { mutableStateOf(false) }
+            DiagnosticsButton(if (checking) "Voice check running… (stay quiet)" else "Voice check", p) {
+                if (checking) return@DiagnosticsButton
+                checking = true
+                checkLines = emptyList()
+                checkScope.launch {
+                    try {
+                        com.example.ai.VoiceCheck(context).run { line -> checkLines = checkLines + line }
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        checkLines = checkLines + com.example.ai.VoiceCheck.Line("Voice check", false, "stopped: ${e.javaClass.simpleName}")
+                    } finally {
+                        checking = false
+                    }
+                }
+            }
+            if (checkLines.isNotEmpty()) {
+                Text(
+                    com.example.ai.VoiceCheck.report(checkLines),
+                    style = MochiType.Label,
+                    color = p.textSecondary
+                )
+                if (!checking) DiagnosticsButton("Copy voice check", p) {
+                    clipboard.setText(androidx.compose.ui.text.AnnotatedString(com.example.ai.VoiceCheck.report(checkLines)))
+                }
             }
             val heardFile = remember { com.example.ai.VoiceCommandService.lastHeardFile(context) }
             var playing by remember { mutableStateOf(false) }

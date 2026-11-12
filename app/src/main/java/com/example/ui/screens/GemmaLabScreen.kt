@@ -219,16 +219,22 @@ fun GemmaLabScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 }
                 if (bench.isNotEmpty()) {
                     val passed = bench.count { it.passed }
+                    val understood = bench.count { it.understood }
                     Text(
-                        "Passed $passed of ${bench.size} · average %.1f s per request".format(bench.map { it.seconds }.average()),
+                        "Understood $understood of ${bench.size} · complete with details $passed · average %.1f s per request".format(bench.map { it.seconds }.average()),
                         style = MochiType.Body.copy(fontWeight = FontWeight.SemiBold), color = p.textPrimary
                     )
                     bench.forEach { o ->
+                        val mark = when { o.passed -> "✓ "; o.understood -> "≈ "; else -> "✗ " }
+                        val note = when {
+                            o.passed -> ""
+                            o.understood -> "  (understood, detail missing: expected \"${o.case.target}\")"
+                            else -> "  (expected ${o.case.action})"
+                        }
                         Text(
-                            (if (o.passed) "✓ " else "✗ ") + "[${o.case.language}] ${o.case.text} → ${o.action ?: "?"}" +
-                                (o.target?.let { " ($it)" } ?: "") + if (o.passed) "" else "  (expected ${o.case.action})",
+                            mark + "[${o.case.language}] ${o.case.text} → ${o.action ?: "?"}" + (o.target?.let { " ($it)" } ?: "") + note,
                             style = MochiType.Label,
-                            color = if (o.passed) p.textSecondary else Color(0xFFE57373)
+                            color = when { o.passed -> p.textSecondary; o.understood -> Color(0xFFE0A050); else -> Color(0xFFE57373) }
                         )
                     }
                 }

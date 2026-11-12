@@ -2,6 +2,18 @@
 
 Every update gets a new version. Check yours in **Settings** (bottom of the screen): `MochiLife <version> (build <code>)`.
 
+## 2.9 (build 20)
+She can no longer answer herself, and Live conversation is back as the fast mode.
+- Rule, enforced in code: her voice can never become a request. No request is recorded while her voice plays (any attempt is refused and logged), and in Live mode the microphone is not sent to the AI at all while she speaks. Only her name, "stop" or a tap interrupt her. The loudness-based "talk over her" from 2.7, which mistook her own voice for you, is removed.
+- Turn by turn: listening starts again 0.3 s after her voice has really stopped, from fresh sound only (nothing recorded while she spoke is used).
+- Echo guard checks every transcript: two or more of her words in a row making up half of what was heard ("I'm listening…") is her own voice and is ignored without a reply.
+- Loop breaker: three very short turns in a row, each within 12 s, with nobody saying her name or tapping, ends the conversation and says so in the voice log.
+- Live conversation (Settings → Live conversation, on by default): after her name a Gemini Live session opens on the same microphone. She starts talking while the answer is still being made, phone actions still go through the app's checks and 3-second countdown, and a request said in one breath with her name is included. Every session measures how long her voice takes to start; if the connection fails, or the first answer takes more than 2.5 s, she continues turn by turn by herself without losing what you said. 25 s of silence ends the conversation. A tap on the mic starts or ends it.
+- Voice check (Settings → Diagnostics): about a minute in a quiet room. Measures room noise and how much of her voice reaches the mic, confirms nothing after her voice is taken as speech and that the echo guard knows her words, and times three AI answers, three natural-voice starts and three Live voice answers from this phone. Prints PASS/FAIL with numbers and can be copied.
+- Gemma Lab: the quality test now shows "understood, detail missing" (≈) separately from real misses.
+- Fixed: the "Send crash reports" switch from 2.3 was not saved between app starts.
+- Not in this version: on-phone commands (calls, alarms…) are not handled on the phone first in Live mode; Live does them through its own action call.
+
 ## 2.8 (build 19)
 Fixes from the 2.7 voice log, and Gemma Lab.
 - No more 30-second waits. The AI service sometimes held a request for 11–30 s while the same request sent again answered in 2 s. Now, if no answer has come after 4 s, the same request goes out a second time in parallel and the first answer wins; a model that is out of quota or unavailable hands over to the other model at once; nothing waits longer than 15 s (28 s for long tasks), and then she says plainly that the AI service is slow. Every try is in the voice log.

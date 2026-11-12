@@ -78,6 +78,8 @@ data class MochiPersistentSettings(
     val wakePhrase: String = "hey mochi",
     /** Open-mic Gemini Live conversation instead of turn-by-turn voice. Best with headphones. */
     val liveVoiceChat: Boolean = false,
+    /** Live conversation (streaming voice) after her name; falls back to turn by turn on its own. */
+    val liveMode: Boolean = true,
     /** Hide the beep Android plays when the microphone opens and closes. */
     val silentListening: Boolean = true,
     val crashReports: Boolean = true,

@@ -12,7 +12,11 @@ object GemmaBench {
 
     data class Case(val text: String, val language: String, val action: String, val target: String? = null)
 
-    data class Outcome(val case: Case, val answer: String, val action: String?, val target: String?, val passed: Boolean, val seconds: Double)
+    /**
+     * [passed] = right action and the expected detail; [understood] = right action (the detail —
+     * a name, app or time — may be missing).
+     */
+    data class Outcome(val case: Case, val answer: String, val action: String?, val target: String?, val passed: Boolean, val seconds: Double, val understood: Boolean = passed)
 
     val ACTIONS = listOf("CALL", "WHATSAPP_CALL", "OPEN_APP", "YOUTUBE", "SET_ALARM", "SET_TIMER", "READ_MESSAGES", "TIME", "CHAT")
 
@@ -61,6 +65,6 @@ object GemmaBench {
         val (action, target) = parse(answer)
         val actionOk = action == case.action
         val targetOk = case.target == null || (target ?: "").lowercase().contains(case.target.lowercase())
-        return Outcome(case, answer, action, target, actionOk && targetOk, seconds)
+        return Outcome(case, answer, action, target, actionOk && targetOk, seconds, understood = actionOk)
     }
 }

@@ -1,6 +1,7 @@
 package com.example
 
-import com.example.ai.TalkOverDetector
+import com.example.ai.EchoGuard
+import com.example.ai.LoopBreaker
 import com.example.ai.VoiceActivity
 import com.example.ai.WakePhraseMatcher
 import org.junit.Assert.assertEquals
@@ -27,55 +28,31 @@ class OneMicTest {
     }
 
     @Test
-    fun `her own voice through the speaker does not count as talking over her`() {
-        val d = TalkOverDetector()
-        d.reset(TalkOverDetector.Mode.SPEAKING)
-        var sample = 0L
-        // Her voice leaking through at 300-700 for 5 seconds.
-        repeat(160) { i -> assertEquals(-1L, d.feed(300.0 + (i % 5) * 100, sample)); sample += 480 }
-        assertTrue(d.herVoiceLevel in 250.0..800.0)
+    fun `her own short phrases are recognised as echo, the user's questions are not`() {
+        var now = 0L
+        val g = EchoGuard { now }
+        g.remember("I'm listening. Tell me what's on your mind.")
+        now = 2_000
+        assertTrue(g.isEcho("I'm listening..."))
+        assertTrue(g.isEcho("tell me what's on"))
+        g.remember("Yes, I can hear you clearly.")
+        assertTrue(!g.isEcho("can you hear me"))
+        assertTrue(!g.isEcho("open WhatsApp"))
+        now = 60_000 // too long ago
+        assertTrue(!g.isEcho("I'm listening"))
     }
 
     @Test
-    fun `the user speaking clearly over her is noticed within a third of a second, from their first word`() {
-        val d = TalkOverDetector()
-        d.reset(TalkOverDetector.Mode.SPEAKING)
-        var sample = 0L
-        repeat(60) { d.feed(400.0, sample); sample += 480 }
-        val userStart = sample
-        var found = -1L
-        for (i in 0 until 12) { val r = d.feed(3_000.0, sample); if (r >= 0) { found = r; break }; sample += 480 }
-        assertEquals(userStart, found)
-    }
-
-    @Test
-    fun `a cough or a door does not interrupt her`() {
-        val d = TalkOverDetector()
-        d.reset(TalkOverDetector.Mode.SPEAKING)
-        var sample = 0L
-        repeat(30) { d.feed(400.0, sample); sample += 480 }
-        repeat(5) { assertEquals(-1L, d.feed(5_000.0, sample)); sample += 480 } // 150 ms bang
-        repeat(30) { assertEquals(-1L, d.feed(400.0, sample)); sample += 480 }
-    }
-
-    @Test
-    fun `while she thinks normal speech is enough`() {
-        val d = TalkOverDetector()
-        d.reset(TalkOverDetector.Mode.THINKING)
-        var sample = 0L
-        repeat(30) { d.feed(80.0, sample); sample += 480 }
-        var found = -1L
-        repeat(12) { if (found < 0) found = d.feed(1_200.0, sample); sample += 480 }
-        assertTrue(found >= 0)
-    }
-
-    @Test
-    fun `background chatter while she thinks does not drop her answer`() {
-        val d = TalkOverDetector()
-        d.reset(TalkOverDetector.Mode.THINKING)
-        var sample = 0L
-        repeat(30) { d.feed(80.0, sample); sample += 480 }
-        repeat(100) { assertEquals(-1L, d.feed(400.0, sample)); sample += 480 } // TV in the room
+    fun `three quick short turns with nobody calling her is a loop`() {
+        val t0 = 100_000L
+        assertTrue(LoopBreaker.isLoop(listOf(t0 to 2, t0 + 6_000 to 2, t0 + 12_000 to 1), lastWakeOrTapAt = t0 - 5_000))
+        // A wake phrase or tap during them: a real conversation.
+        assertTrue(!LoopBreaker.isLoop(listOf(t0 to 2, t0 + 6_000 to 2, t0 + 12_000 to 1), lastWakeOrTapAt = t0 + 1_000))
+        // Longer sentences: a real conversation.
+        assertTrue(!LoopBreaker.isLoop(listOf(t0 to 2, t0 + 6_000 to 6, t0 + 12_000 to 1), lastWakeOrTapAt = 0))
+        // Slow turns: a real conversation.
+        assertTrue(!LoopBreaker.isLoop(listOf(t0 to 2, t0 + 20_000 to 2, t0 + 30_000 to 1), lastWakeOrTapAt = 0))
+        assertTrue(!LoopBreaker.isLoop(listOf(t0 to 2, t0 + 6_000 to 2), lastWakeOrTapAt = 0))
     }
 
     @Test

@@ -92,11 +92,8 @@ class VoiceCommandService(
         /** Safety net: stop waiting for a reply after this long. */
         private const val AWAIT_REPLY_TIMEOUT_MS = 20_000L
         /** Pause after she stops talking before a follow-up listen, so the room echo has died down. */
-        private const val FOLLOW_UP_DELAY_MS = 250L
-        /** Her voice's echo tail after she stops (skipped when the next turn starts): 0.2 s. */
-        private const val ECHO_TAIL_SAMPLES = 3_200L
-        /** Lead-in kept before the user's first loud frame when they talk over her: 0.3 s. */
-        private const val TALK_OVER_LEAD_SAMPLES = 4_800L
+        /** Listening resumes this long after her voice has really stopped (echo tail): 0.3 s. */
+        private const val AFTER_SPEECH_MS = 300L
         /** Pause that ends the user's turn (Android's default is shorter and cuts people off). */
         private const val END_OF_SPEECH_SILENCE_MS = 1_800L
         /** Quiet turns in a row before she says goodbye and stops listening. */
@@ -323,11 +320,12 @@ class VoiceCommandService(
                 paused = liveCallActive || otherAppUsingMic,
                 speaking = assistantSpeaking,
                 awaitingReply = awaitingReply,
-                commandSession = sessionKind == SessionKind.COMMAND,
+                commandSession = sessionKind == SessionKind.COMMAND || (liveActive && liveSending),
                 wakeSession = sessionKind == SessionKind.WAKE
             )
         )
         if (p != _phase.value) { _phase.value = p; phaseSince = now }
+        if (liveActive || livePending) return // Live has its own silence limit and fallback
         val fix = watchdog.check(p, wantsWakeSession() && !wakeEngine.isLoading && !wakeLoopSuspended, now - phaseSince)
         if (fix == Recovery.NONE) return
         VoiceLog.add(VoiceLog.Kind.ERROR, "Watchdog: stuck in \"${p.label}\" for ${(now - phaseSince) / 1000}s, resetting ($fix)")
@@ -364,16 +362,34 @@ class VoiceCommandService(
     @Volatile private var capture: SpeechCapture? = null
     /** Feed the wake decoder (waiting for her name, or while she talks so her name can interrupt). */
     @Volatile private var wakeFeeding = false
-    /** Watch for the user talking over her (while she thinks or speaks). */
-    @Volatile private var talkOverWatch = false
-    private val talkOver = TalkOverDetector()
-    /** Settings → "Interrupt by talking"; switched off for the session if her own voice trips it. */
-    @Volatile private var talkOverEnabled = true
-    private var lastCaptureWasTalkOver = false
-    private var echoTalkOvers = 0
+    /**
+     * Live conversation (Gemini Live) on this same microphone. While [liveSending] is true, every
+     * frame goes to the Live session; while she speaks it is false, so her own voice can never
+     * reach the AI. Her name or "stop" still interrupt her through the offline wake decoder.
+     */
+    @Volatile private var liveSink: ((ShortArray) -> Unit)? = null
+    @Volatile private var liveSending = false
+    private var liveActive = false
+    /** A Live session is being opened: no turn-by-turn recording may start meanwhile. */
+    private var livePending = false
+    /** Her name or "stop" heard while Live is speaking. */
+    var onLiveInterrupt: (() -> Unit)? = null
+    /** Settings → "Live conversation": her name opens a Live session instead of a recorded turn. */
+    @Volatile var useLive = false
+    /** Her name was heard and Live is on: (user kept talking, recorded sample their words start at). */
+    var onWakeLive: ((keptTalking: Boolean, seedFrom: Long) -> Unit)? = null
+    /** Where her last speech ended on the microphone (nothing before this + 0.3 s is ever sent). */
+    @Volatile private var lastSpeakEndSample = 0L
+    /** Extra listeners for the Voice check (measurements only; never create requests). */
+    private val probes = java.util.concurrent.CopyOnWriteArrayList<(ShortArray, Double) -> Unit>()
+    /** Her voice level at the mic while she speaks (average frame level), for the voice log and Voice check. */
+    @Volatile private var herLevelSum = 0.0
+    @Volatile private var herLevelFrames = 0
+    /** Recent turns, for the loop breaker. */
+    private val recentTurns = ArrayDeque<Pair<Long, Int>>() // (time, words)
+    private var lastWakeOrTapAt = 0L
     /** The phone's own recogniser is listening (it needs the mic to itself). */
     private var phoneRecognizerSession = false
-    private var speakEndSample = 0L
     /**
      * Increases with every new request. A reply that arrives for an older request (the user
      * talked over her meanwhile) is dropped by whoever was going to speak it.
@@ -383,12 +399,15 @@ class VoiceCommandService(
 
     private val frameSink = MicHub.FrameSink { frame, rms, start ->
         if (wakeFeeding) wakeEngine.feed(frame, rms, start)
-        capture?.feed(frame, rms)
-        if (talkOverWatch) {
-            val from = talkOver.feed(rms, start)
-            if (from >= 0) mainHandler.post { onTalkOver(from) }
-        }
+        // A request can only be recorded while she is silent (enforced again in startCapture).
+        if (!speakingNow) capture?.feed(frame, rms)
+        if (liveSending && !speakingNow) liveSink?.invoke(frame)
+        if (speakingNow) { herLevelSum += rms; herLevelFrames++ }
+        for (probe in probes) probe(frame, rms)
     }
+
+    /** Mirrors [assistantSpeaking] for the microphone thread. */
+    @Volatile private var speakingNow = false
 
     // ---- Listening engine: the AI hears the audio (default), or the phone's recogniser ----
     @Volatile private var aiListening = true
@@ -579,6 +598,7 @@ class VoiceCommandService(
 
     /** Tap-to-talk. Tapping again while listening stops it. */
     fun triggerManualMicSession(hasRecordPermission: Boolean) {
+        lastWakeOrTapAt = System.currentTimeMillis()
         runOnMain {
             this.hasRecordPermission = hasRecordPermission
             if (!hasRecordPermission) return@runOnMain
@@ -626,26 +646,34 @@ class VoiceCommandService(
         runOnMain {
             if (assistantSpeaking == speaking) return@runOnMain
             assistantSpeaking = speaking
+            speakingNow = speaking
             if (speaking) {
+                liveSending = false // resumes only 0.3 s after her voice has really stopped
                 awaitingReply = false
                 awaitReplyJob?.cancel()
                 restartListeningJob?.cancel()
-                // A request being recorded ends; her name (and talking over her) can still interrupt.
+                // Rule: her voice can never become a request. No request recorder exists while she
+                // speaks; only her name, "stop" or a tap interrupt her.
                 if (sessionKind == SessionKind.COMMAND) cancelSession(destroy = false)
-                talkOver.reset(TalkOverDetector.Mode.SPEAKING)
+                herLevelSum = 0.0; herLevelFrames = 0
                 reevaluate()
             } else {
-                speakEndSample = hub.samplesRecorded
-                if (talkOver.herVoiceLevel > 0) VoiceLog.add(VoiceLog.Kind.SPOKE, "Her voice reached the mic at level %.0f after echo cancelling".format(talkOver.herVoiceLevel))
-                if (conversationActive && hosts.isNotEmpty() && hasRecordPermission && !liveCallActive) {
-                    // In a conversation: take the next thing the user says. The mic never closed,
-                    // so anything said since she stopped (minus her echo tail) is included.
+                lastSpeakEndSample = hub.samplesRecorded
+                if (herLevelFrames > 20) VoiceLog.add(VoiceLog.Kind.SPOKE, "Her voice reached the mic at level %.0f after echo cancelling".format(herLevelSum / herLevelFrames))
+                if (liveActive) {
+                    // Live: resume sending the mic a moment after her voice has really stopped.
                     restartListeningJob?.cancel()
                     restartListeningJob = scope.launch(Dispatchers.Main) {
-                        delay(FOLLOW_UP_DELAY_MS)
-                        if (!assistantSpeaking && !awaitingReply && sessionKind != SessionKind.COMMAND) {
-                            startCapture(seedFrom = speakEndSample + ECHO_TAIL_SAMPLES)
-                        }
+                        delay(AFTER_SPEECH_MS)
+                        if (!assistantSpeaking && liveActive) liveSending = true
+                    }
+                } else if (conversationActive && hosts.isNotEmpty() && hasRecordPermission && !liveCallActive) {
+                    // Turn-based: the next turn starts 0.3 s after playback ended, from fresh audio
+                    // only (nothing recorded while she was speaking is used).
+                    restartListeningJob?.cancel()
+                    restartListeningJob = scope.launch(Dispatchers.Main) {
+                        delay(AFTER_SPEECH_MS)
+                        if (!assistantSpeaking && !awaitingReply && sessionKind != SessionKind.COMMAND) startCapture()
                     }
                 } else {
                     reevaluate(delayMs = 300L)
@@ -703,7 +731,7 @@ class VoiceCommandService(
     /** The microphone is needed for anything at all right now. */
     private fun hubNeeded(): Boolean =
         hosts.isNotEmpty() && hasRecordPermission && !liveCallActive && !pausedForCall && !phoneRecognizerSession &&
-            (sessionKind != null || assistantSpeaking || awaitingReply || conversationActive || wantsWakeSession())
+            (sessionKind != null || assistantSpeaking || awaitingReply || conversationActive || liveActive || holdMicForCheck || wantsWakeSession())
 
     /** Opens or closes the one microphone to match what is needed. */
     private fun syncHub() {
@@ -724,25 +752,70 @@ class VoiceCommandService(
     /** Who gets the microphone's frames right now. */
     private fun updateFeeds() {
         wakeFeeding = sessionKind == SessionKind.WAKE && wakeEngine.isListening
-        val watch = talkOverEnabled && sessionKind != SessionKind.COMMAND && (assistantSpeaking || awaitingReply)
-        if (watch && !talkOverWatch) talkOver.reset(if (assistantSpeaking) TalkOverDetector.Mode.SPEAKING else TalkOverDetector.Mode.THINKING)
-        talkOverWatch = watch
     }
 
+    // ---- Live conversation on the shared microphone ----
+
     /**
-     * The user started talking while she was thinking or speaking: she stops, drops the answer she
-     * was preparing, and takes the new request from its first word.
+     * Starts feeding the microphone to a Live session. [seedFrom] is the recorded sample to start
+     * from (what the user said after her name while the connection opened). Main thread.
      */
-    private fun onTalkOver(fromSample: Long) {
-        if (!talkOverWatch || sessionKind == SessionKind.COMMAND) return
-        if (assistantSpeaking) bargeIn("You talked over her: she stopped and is listening")
-        if (awaitingReply) {
-            awaitReplyJob?.cancel()
-            awaitingReply = false
-            turnId++
-            VoiceLog.add(VoiceLog.Kind.WAKE, "You spoke while she was thinking: her answer is dropped, listening to you")
-        }
-        startCapture(seedFrom = fromSample - TALK_OVER_LEAD_SAMPLES, talkOver = true)
+    fun beginLive(seedFrom: Long, sink: (ShortArray) -> Unit) {
+        restartListeningJob?.cancel()
+        if (sessionKind == SessionKind.COMMAND) cancelSession(destroy = false)
+        liveActive = true
+        livePending = false
+        conversationActive = true
+        _inConversation.value = true
+        syncHub()
+        // Only the user's words: never anything from before her last speech ended (+0.3 s).
+        val floor = lastSpeakEndSample + AFTER_SPEECH_MS * 16
+        val from = if (seedFrom < 0) hub.samplesRecorded else maxOf(seedFrom, floor)
+        if (!assistantSpeaking) for (f in hub.framesSince(from)) sink(f)
+        liveSink = sink
+        liveSending = !assistantSpeaking
+        reevaluate()
+        VoiceLog.add(VoiceLog.Kind.WAKE, "Live conversation: microphone connected")
+    }
+
+    /** Live session ended (goodbye, silence, error or fallback). Main thread. */
+    fun endLive(reason: String) {
+        livePending = false
+        if (!liveActive) return
+        liveActive = false
+        liveSending = false
+        liveSink = null
+        VoiceLog.add(VoiceLog.Kind.WAKE, "Live conversation ended ($reason)")
+        reevaluate(delayMs = WAKE_RESTART_MS)
+    }
+
+    val isLiveActive: Boolean get() = liveActive
+
+    /** A Live session is about to open (after her name or a tap). Main thread. */
+    fun liveStarting() {
+        livePending = true
+        if (sessionKind == SessionKind.COMMAND) cancelSession(destroy = false)
+    }
+
+    /** The sample counter of the shared microphone (to seed a Live session or a capture). */
+    val micPosition: Long get() = hub.samplesRecorded
+
+    /** Recorded audio since [sample] (for falling back from Live without losing what was said). */
+    fun recordedSince(sample: Long): List<ShortArray> = hub.framesSince(sample)
+
+    // ---- Voice check probes (measurements only) ----
+
+    fun addProbe(probe: (ShortArray, Double) -> Unit) { probes += probe; runOnMain { syncHub() } }
+    fun removeProbe(probe: (ShortArray, Double) -> Unit) { probes -= probe }
+    /** Keeps the microphone open for the Voice check even with nothing else listening. */
+    @Volatile var holdMicForCheck = false
+        set(value) { field = value; runOnMain { syncHub() } }
+
+    /** Starts one request recording now (used to resume turn-based mode after a Live fallback). */
+    fun listenNow(seedFrom: Long = hub.samplesRecorded) = runOnMain {
+        conversationActive = true
+        _inConversation.value = true
+        startCapture(seedFrom = seedFrom)
     }
 
     /** Decides whether the passive wake loop should be running, and (re)starts it if so. */
@@ -793,7 +866,7 @@ class VoiceCommandService(
             onWake = { keptTalking, utteranceStart -> onWakePhrase(keptTalking, utteranceStart) },
             onAbort = {
                 if (assistantSpeaking && !echoGuard.saidRecently(listOf("stop")) && !echoGuard.saidRecently(listOf("cancel"))) {
-                    bargeIn("Stopped her (\"stop\")")
+                    if (liveActive) onLiveInterrupt?.invoke() else bargeIn("Stopped her (\"stop\")")
                 }
                 if (_pendingAction.value != null) {
                     VoiceLog.add(VoiceLog.Kind.WAKE, "Countdown cancelled by voice")
@@ -820,6 +893,13 @@ class VoiceCommandService(
      */
     private fun onWakePhrase(keptTalking: Boolean, utteranceStart: Long) {
         hardErrorCount = 0
+        lastWakeOrTapAt = System.currentTimeMillis()
+        if (liveActive) {
+            if (assistantSpeaking && echoGuard.saidRecently(wakeMatcher.words)) return
+            VoiceLog.add(VoiceLog.Kind.WAKE, "Interrupted her with the wake phrase (Live)")
+            onLiveInterrupt?.invoke()
+            return
+        }
         if (assistantSpeaking) {
             if (echoGuard.saidRecently(wakeMatcher.words)) {
                 // She said her own wake phrase out loud: that's not the user.
@@ -832,17 +912,30 @@ class VoiceCommandService(
         }
         wakeAt = System.currentTimeMillis()
         wakeEngine.stop()
-        val from = if (keptTalking && utteranceStart >= 0) utteranceStart else hub.samplesRecorded
+        val kept = keptTalking && utteranceStart >= 0
+        val from = if (kept) utteranceStart else hub.samplesRecorded
+        val live = onWakeLive
+        if (useLive && live != null) {
+            livePending = true
+            live(kept, from)
+            return
+        }
         startCapture(seedFrom = from)
-        onWakeWordOnly?.invoke(keptTalking && utteranceStart >= 0)
+        onWakeWordOnly?.invoke(kept)
     }
 
     /**
      * One spoken turn for the AI (see [SpeechCapture]), taken from the shared microphone. [seedFrom]
      * is the recorded sample to start from, so words already spoken are not lost.
      */
-    private fun startCapture(seedFrom: Long = hub.samplesRecorded, talkOver: Boolean = false) {
+    private fun startCapture(seedFrom: Long = hub.samplesRecorded) {
         restartListeningJob?.cancel()
+        if (assistantSpeaking) {
+            // Hard rule: never record a request while her voice is playing.
+            VoiceLog.add(VoiceLog.Kind.IGNORED, "Not recording while she speaks")
+            return
+        }
+        if (liveActive || livePending) return
         if (otherAppUsingMic) {
             VoiceLog.add(VoiceLog.Kind.IGNORED, "Not listening: another app has the microphone right now")
             _lastError.value = "Another app is using the microphone right now. Try again when it's done."
@@ -874,7 +967,6 @@ class VoiceCommandService(
         val earlier = hub.framesSince(seedFrom.coerceAtLeast(0L))
         c.seed(earlier)
         capture = c
-        lastCaptureWasTalkOver = talkOver
         _wakeWordArmed.value = true
         _isActivelyListening.value = true
         _isWakeLoopRunning.value = false
@@ -909,28 +1001,50 @@ class VoiceCommandService(
     }
 
     /**
-     * The AI heard the user say [transcript] (an audio turn). Returns false when it should be
-     * ignored: words she herself said, picked up when the user seemed to talk over her. Main thread.
+     * The AI heard the user say [transcript] (an audio turn). Returns false when it must be
+     * ignored: her own words picked up by the microphone, or a self-talk loop. Main thread.
      */
     fun onUserSaid(transcript: String): Boolean {
-        if (lastCaptureWasTalkOver && echoGuard.isEcho(transcript)) {
-            lastCaptureWasTalkOver = false
-            echoTalkOvers++
+        if (echoGuard.isEcho(transcript)) {
             VoiceLog.add(VoiceLog.Kind.IGNORED, "That was her own voice, not you: \"$transcript\"")
-            if (echoTalkOvers >= 2) {
-                talkOverEnabled = false
-                VoiceLog.add(VoiceLog.Kind.ERROR, "Interrupting by talking is off until the app restarts: the phone's echo canceller lets her voice through. Say her name to interrupt her.")
-            }
-            updateFeeds()
-            reevaluate(delayMs = 300L)
+            awaitingReply = false
+            if (conversationActive) restartListeningAfterIgnored()
             return false
         }
-        lastCaptureWasTalkOver = false
+        if (loopDetected(transcript)) {
+            VoiceLog.add(VoiceLog.Kind.ERROR, "Stopped a loop: three very short turns in a row with nobody calling her. Say her name to start again.")
+            CrashReports.nonFatal("Voice loop breaker fired")
+            endConversation("loop stopped")
+            awaitingReply = false
+            reevaluate(delayMs = WAKE_RESTART_MS)
+            return false
+        }
         VoiceLog.add(VoiceLog.Kind.HEARD, "\"$transcript\"")
         quietTurns = 0
         userTurns++
         if (GOODBYE_REGEX.containsMatchIn(transcript)) endConversation("goodbye")
         return true
+    }
+
+    /** Waits for real speech again without replying (after an ignored echo). */
+    private fun restartListeningAfterIgnored() {
+        restartListeningJob?.cancel()
+        restartListeningJob = scope.launch(Dispatchers.Main) {
+            delay(AFTER_SPEECH_MS)
+            if (!assistantSpeaking && !awaitingReply && sessionKind != SessionKind.COMMAND && conversationActive) startCapture()
+        }
+    }
+
+    /**
+     * Three turns in a row, each within 12 s of the one before, each under four words, with no
+     * wake phrase or tap since the first: that is her talking to herself, not a conversation.
+     */
+    private fun loopDetected(transcript: String): Boolean {
+        val now = System.currentTimeMillis()
+        val words = transcript.trim().split(Regex("\\s+")).count { it.isNotBlank() }
+        recentTurns.addLast(now to words)
+        while (recentTurns.size > 3) recentTurns.removeFirst()
+        return LoopBreaker.isLoop(recentTurns.toList(), lastWakeOrTapAt)
     }
 
     private var lastUtteranceSec = 0.0
@@ -1369,6 +1483,7 @@ class VoiceCommandService(
         awaitReplyJob?.cancel()
         runOnMain {
             cancelSession(destroy = true)
+            liveSink = null; liveSending = false; liveActive = false
             hub.stop()
             wakeEngine.release()
         }
@@ -1379,6 +1494,24 @@ class VoiceCommandService(
  * Recognises the companion's own words coming back through the microphone (speaker echo).
  * Main thread only. Pure logic, unit-tested.
  */
+/**
+ * Three turns in a row, each within [GAP_MS] of the one before, each under [MAX_WORDS] words,
+ * with no wake phrase or tap since the first of them, is a self-talk loop. Pure logic, unit-tested.
+ */
+object LoopBreaker {
+    const val GAP_MS = 12_000L
+    const val MAX_WORDS = 4
+
+    /** @param turns the last turns (time, word count), oldest first. */
+    fun isLoop(turns: List<Pair<Long, Int>>, lastWakeOrTapAt: Long): Boolean {
+        if (turns.size < 3) return false
+        val last3 = turns.takeLast(3)
+        if (last3.any { it.second >= MAX_WORDS }) return false
+        if (last3.zipWithNext().any { (a, b) -> b.first - a.first > GAP_MS }) return false
+        return lastWakeOrTapAt < last3.first().first
+    }
+}
+
 class EchoGuard(private val clock: () -> Long = System::currentTimeMillis) {
     private val recent = ArrayDeque<Pair<List<String>, Long>>()
 
@@ -1402,14 +1535,29 @@ class EchoGuard(private val clock: () -> Long = System::currentTimeMillis) {
      */
     fun isEcho(heard: String): Boolean {
         val words = tokens(heard)
-        if (words.size < 3) return false
-        val allowedSlips = if (words.size >= 4) 1 else 0
+        if (words.isEmpty()) return false
         val now = clock()
-        return recent.any { (said, at) ->
-            now - at <= WINDOW_MS && said.size >= words.size && (0..said.size - words.size).any { start ->
-                words.indices.count { words[it] != said[start + it] } <= allowedSlips
-            }
+        val lastTwo = recent.toList().takeLast(2).filter { (_, at) -> now - at <= WINDOW_MS }
+        return lastTwo.any { (said, _) ->
+            // 1. A run of two or more of her words, in order, covering at least half of what was heard
+            //    ("I'm listening..." right after she said "I'm listening. Tell me…").
+            val run = longestSharedRun(words, said)
+            if (run >= 2 && run * 2 >= words.size) return@any true
+            // 2. A longer stretch of her sentence with one slip allowed.
+            if (words.size < 3 || said.size < words.size) return@any false
+            val allowedSlips = if (words.size >= 4) 1 else 0
+            (0..said.size - words.size).any { start -> words.indices.count { words[it] != said[start + it] } <= allowedSlips }
         }
+    }
+
+    private fun longestSharedRun(a: List<String>, b: List<String>): Int {
+        var best = 0
+        for (i in a.indices) for (j in b.indices) {
+            var k = 0
+            while (i + k < a.size && j + k < b.size && a[i + k] == b[j + k]) k++
+            if (k > best) best = k
+        }
+        return best
     }
 
     private fun tokens(text: String): List<String> =
