@@ -6,6 +6,7 @@ import android.net.NetworkCapabilities
 import android.os.StatFs
 import android.util.Log
 import com.example.ai.gemma.GemmaCatalog
+import com.example.diag.AppTrail
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -69,6 +70,9 @@ object OfflineCatalog {
     val ALL = LISTENERS + VOICES
 
     /** The voice pack for a language code ("en", "ar", "fa"). */
+    fun packDir(filesDir: File, pack: OfflinePack) = File(File(filesDir, "offline-speech"), pack.id)
+    fun packReady(filesDir: File, pack: OfflinePack) = pack.files.all { File(packDir(filesDir, pack), it.first).exists() }
+
     fun voiceFor(language: String): OfflinePack = when (language) { "ar" -> VOICE_AR; "fa" -> VOICE_FA; else -> VOICE_EN }
 }
 
@@ -89,9 +93,9 @@ class OfflinePackDownloader(context: Context) {
     private val states = OfflineCatalog.ALL.associate { it.id to MutableStateFlow(initial(it)) }
     private val jobs = HashMap<String, Job>()
 
-    fun dir(pack: OfflinePack) = File(root, pack.id)
+    fun dir(pack: OfflinePack) = OfflineCatalog.packDir(appContext.filesDir, pack)
     fun state(pack: OfflinePack): StateFlow<State> = states.getValue(pack.id).asStateFlow()
-    fun isReady(pack: OfflinePack) = pack.files.all { File(dir(pack), it.first).exists() }
+    fun isReady(pack: OfflinePack) = OfflineCatalog.packReady(appContext.filesDir, pack)
 
     private fun initial(pack: OfflinePack): State = if (isReady(pack)) State.Ready else State.NotDownloaded
 
@@ -113,12 +117,14 @@ class OfflinePackDownloader(context: Context) {
             flow.value = State.Failed("Not enough free space: %.2f GB needed.".format((pack.approxBytes + 200_000_000L) / 1e9))
             return
         }
+        AppTrail.add("OFFLINE", "download ${pack.id} started")
         jobs[pack.id] = scope.launch {
             try {
                 download(pack, flow)
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.w(TAG, "Download failed: ${e.javaClass.simpleName}")
+                AppTrail.add("OFFLINE", "download ${pack.id} failed ${e.javaClass.simpleName}")
                 flow.value = State.Failed("Download stopped (${e.javaClass.simpleName}). Tap Download to resume.")
             }
         }
@@ -189,6 +195,7 @@ class OfflinePackDownloader(context: Context) {
             doneBefore += size
         }
         flow.value = State.Ready
+        AppTrail.add("OFFLINE", "download ${pack.id} ready")
     }
 
     private fun sha256(f: File): String {

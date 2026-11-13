@@ -157,6 +157,7 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
 
     override fun onCreate() {
         super.onCreate()
+        com.example.diag.AppTrail.add("SERVICE", "listening service started")
         savedStateRegistryController.performRestore(null)
         lifecycleRegistry.currentState = Lifecycle.State.CREATED
 
@@ -343,7 +344,9 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
         serviceScope.launch {
             isThinking = true
             bubbleHideJob?.cancel()
+            // On the phone an answer takes a few seconds: say she is working (no beep, no filler speech).
             bubbleText = null
+            if (voice.phoneOnlyNow()) showBubble("Thinking…", autoHideMs = 15_000L)
             controller.transitionTo(CharacterRuntimeState.Thinking)
             try {
                 val userName = com.example.security.SecureStore(applicationContext).getString("userName")
@@ -682,6 +685,7 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
     }
 
     override fun onDestroy() {
+        com.example.diag.AppTrail.add("SERVICE", "listening service stopped")
         if (instance === this) instance = null
         hideDismissTarget()
         voice.unbindCallbacks(OWNER)

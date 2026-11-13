@@ -99,6 +99,8 @@ fun GemmaLabScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         }
     }
 
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { com.example.ai.gemma.LabCleanup.run(context) } }
+
     val speech = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val heard = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
         if (!heard.isNullOrBlank()) sendText(heard)

@@ -77,6 +77,7 @@ class CadenceViewModel(
     private val hashBackStack = ArrayDeque<String>()
 
     fun navigateHash(route: String) {
+        com.example.diag.AppTrail.add("SCREEN", route)
         val current = _currentHashRoute.value
         if (current == route) return
         hashBackStack.addLast(current)

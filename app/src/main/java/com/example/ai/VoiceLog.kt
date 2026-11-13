@@ -19,6 +19,8 @@ object VoiceLog {
     val entries: StateFlow<List<Entry>> = _entries.asStateFlow()
 
     fun add(kind: Kind, text: String) {
+        // Events only: wake and error lines never quote speech, so they are mirrored to the app trail.
+        if (kind == Kind.WAKE || kind == Kind.ERROR) com.example.diag.AppTrail.add("VOICE", text)
         val entry = Entry(System.currentTimeMillis(), kind, text.take(200))
         _entries.value = (_entries.value + entry).takeLast(MAX)
     }

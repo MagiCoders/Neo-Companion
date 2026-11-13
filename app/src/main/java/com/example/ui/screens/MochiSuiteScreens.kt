@@ -835,6 +835,24 @@ fun ProfileAndSettingsScreen(
                     },
                     style = MochiType.Label, color = p.textTertiary
                 )
+                if (settings.aiEngine != "cloud") {
+                    val ctx = androidx.compose.ui.platform.LocalContext.current
+                    val have by androidx.compose.runtime.produceState(Triple("", "", false), settings.aiEngine) {
+                        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            val brain = com.example.ai.gemma.GemmaEngine.downloadedModel(ctx)?.label ?: ""
+                            val ears = com.example.ai.offline.OfflineCatalog.LISTENERS
+                                .firstOrNull { com.example.ai.offline.OfflineCatalog.packReady(ctx.filesDir, it) }?.label?.substringBefore(" (") ?: ""
+                            Triple(brain, ears, brain.isNotEmpty() && ears.isNotEmpty())
+                        }
+                    }
+                    Text(
+                        (if (have.first.isNotEmpty()) "${have.first} downloaded" else "No on-phone AI downloaded") + " · " +
+                            (if (have.second.isNotEmpty()) "${have.second} downloaded" else "No listener downloaded: Gemma will listen itself (slower)") +
+                            (if (!have.third) ". Download them in Gemma Lab." else ""),
+                        style = MochiType.Label,
+                        color = if (have.third) p.textTertiary else androidx.compose.ui.graphics.Color(0xFFE0A050)
+                    )
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(MochiSpacing.xs)) {
                     listOf("auto" to "Automatic", "cloud" to "Cloud", "phone" to "On this phone").forEach { (value, label) ->
                         val selected = settings.aiEngine == value
@@ -3076,6 +3094,26 @@ private fun DiagnosticsCard(p: SuitePalette) {
                     copied = true
                 }
             }
+        }
+        HairlineDivider(p.hairline)
+        Text("Last close", style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold), color = p.textPrimary)
+        val lastCloseContext = androidx.compose.ui.platform.LocalContext.current
+        var lastClose by remember { mutableStateOf("") }
+        LaunchedEffect(Unit) {
+            lastClose = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                "Why the app last closed\n" + com.example.diag.ExitReasons.report(lastCloseContext) +
+                    "\n\nLast app error\n" + (com.example.diag.CrashRecorder.lastCrashText(lastCloseContext) ?: "None recorded.") +
+                    "\n\nWhat it was doing before\n" +
+                    (com.example.diag.AppTrail.previousRunTail(40).joinToString("\n").ifBlank { "No earlier run recorded." })
+            }
+        }
+        Text(lastClose.lines().take(25).joinToString("\n"), style = MochiType.Label, color = p.textSecondary)
+        Row(horizontalArrangement = Arrangement.spacedBy(MochiSpacing.xs)) {
+            DiagnosticsButton("Copy last close", p) { clipboard.setText(androidx.compose.ui.text.AnnotatedString(lastClose)) }
+            DiagnosticsButton("Clear", p) { com.example.diag.CrashRecorder.clear(lastCloseContext); lastClose = lastClose.substringBefore("Last app error") + "Last app error\nNone recorded." }
+        }
+        DiagnosticsButton("Copy app trail", p) {
+            clipboard.setText(androidx.compose.ui.text.AnnotatedString(com.example.diag.AppTrail.tail(120).joinToString("\n")))
         }
         HairlineDivider(p.hairline)
         Text("Performance", style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold), color = p.textPrimary)

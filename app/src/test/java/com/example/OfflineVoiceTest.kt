@@ -3,6 +3,8 @@ package com.example
 import com.example.ai.gemma.GemmaEngine
 import com.example.ai.offline.OfflineAudio
 import com.example.ai.offline.OfflineCatalog
+import com.example.ai.offline.PhoneListener
+import com.example.ai.offline.WhisperText
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -37,7 +39,8 @@ class OfflineVoiceUnitTest {
         assertEquals("call ali", GemmaEngine.parseHeard("""```json
             {"heard": "call ali", "reply": "Calling Ali.", "action": "CALL", "target": "Ali"}```"""))
         assertEquals("", GemmaEngine.parseHeard("""{"heard": ""}"""))
-        assertEquals("", GemmaEngine.parseHeard("no json here"))
+        assertNull(GemmaEngine.parseHeard("no json here"))
+        assertNull(GemmaEngine.parseHeard("""{"reply":"hi"}"""))
     }
 
     @Test fun catalogPointsAtTheRightFiles() {
@@ -55,5 +58,24 @@ class OfflineVoiceUnitTest {
             assertTrue(l.files.any { it.first == "$prefix-decoder.int8.onnx" })
             assertTrue(l.files.any { it.first == "$prefix-tokens.txt" })
         }
+    }
+
+    @Test fun listenerChoiceFollowsLanguage() {
+        val both = setOf(OfflineCatalog.LISTENER_BASE.id, OfflineCatalog.LISTENER_SMALL.id)
+        assertEquals(OfflineCatalog.LISTENER_BASE, PhoneListener.choosePack("en", both))
+        assertEquals(OfflineCatalog.LISTENER_SMALL, PhoneListener.choosePack("ar", both))
+        assertEquals(OfflineCatalog.LISTENER_BASE, PhoneListener.choosePack("ar", setOf(OfflineCatalog.LISTENER_BASE.id)))
+        assertNull(PhoneListener.choosePack("fa", emptySet()))
+        assertEquals("ar", PhoneListener.whisperLanguage("ar-IQ"))
+        assertEquals("en", PhoneListener.whisperLanguage("xx-YY"))
+    }
+
+    @Test fun whisperSilencePhrasesAreDropped() {
+        assertEquals("", WhisperText.clean(" [BLANK_AUDIO] "))
+        assertEquals("", WhisperText.clean("(music)"))
+        assertEquals("", WhisperText.clean("Thank you."))
+        assertEquals("", WhisperText.clean("..."))
+        assertEquals("Thank you, call Ali", WhisperText.clean("Thank you, call Ali"))
+        assertEquals("شلونك اليوم؟", WhisperText.clean("شلونك اليوم؟"))
     }
 }

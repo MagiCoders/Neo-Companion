@@ -25,7 +25,7 @@ class SpeechCapture(
      * Nothing was said before the timeout: what the mic picked up meanwhile (WAV), the loudest
      * level in it and the level speech had to reach, so "she didn't hear me" can be checked.
      */
-    private val onNoSpeech: (ByteArray, Double, Double) -> Unit,
+    private val onNoSpeech: (ByteArray, Double, Double, Int, Int) -> Unit,
     /** Quiet that ends a turn: shorter for a short request, longer once they talk at length. */
     shortEndSilenceMs: Int = 900,
     longEndSilenceMs: Int = 1_300
@@ -75,7 +75,9 @@ class SpeechCapture(
                 val heard = wav(everything.toByteArray())
                 val loudest = vad.peakRms
                 val needed = vad.lastThreshold
-                finish { onNoSpeech(heard, loudest, needed) }
+                val above = vad.framesAbove
+                val run = vad.longestRunMs
+                finish { onNoSpeech(heard, loudest, needed, above, run) }
             }
             VoiceActivity.Event.SILENCE -> {
                 preRoll.addLast(chunk)
@@ -154,6 +156,12 @@ class VoiceActivity(
         private set
     var lastThreshold = 0.0
         private set
+    /** Diagnostics only: frames above the speech level, and the longest unbroken run of them (ms). */
+    var framesAbove = 0
+        private set
+    var longestRunMs = 0
+        private set
+    private var currentRun = 0
 
     fun feed(rms: Double): Event {
         lastDb = (20 * log10(max(rms, 1.0))).toFloat()
@@ -162,6 +170,7 @@ class VoiceActivity(
         lastThreshold = threshold
         if (rms > peakRms) peakRms = rms
         val loud = rms > threshold
+        if (loud) { framesAbove++; currentRun++; if (currentRun * frameMs > longestRunMs) longestRunMs = currentRun * frameMs } else currentRun = 0
         if (!inSpeech) {
             waitedFrames++
             // The floor follows the room: quickly down, slowly up (so speech doesn't raise it).

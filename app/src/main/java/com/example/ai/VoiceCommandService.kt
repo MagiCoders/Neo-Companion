@@ -199,7 +199,14 @@ class VoiceCommandService(
                 checkOtherRecorders()
                 syncHub()
                 tickPhase()
-                if (++ticks % 5 == 0) launch(Dispatchers.Default) { PerfMeter.sample() }
+                if (++ticks % 5 == 0) launch(Dispatchers.Default) {
+                    PerfMeter.sample()
+                    if (ticks % 30 == 0) {
+                        val mi = android.app.ActivityManager.MemoryInfo()
+                        appContext.getSystemService(android.app.ActivityManager::class.java).getMemoryInfo(mi)
+                        com.example.diag.AppTrail.add("MEMORY", "app ${PerfMeter.read().memoryMb} MB, free ${mi.availMem / 1_048_576} MB, low: ${mi.lowMemory}")
+                    }
+                }
             }
         }
         try { audioManager.registerAudioRecordingCallback(recordingCallback, mainHandler) } catch (_: Throwable) {}
@@ -459,7 +466,9 @@ class VoiceCommandService(
         private set
 
     private val frameSink = MicHub.FrameSink { frame, rms, start ->
-        if (wakeFeeding) wakeEngine.feed(frame, rms, start)
+        // While Whisper or Gemma is working her name is not decoded (it would starve them); a tap
+        // still interrupts, and while she is speaking her name still does.
+        if (wakeFeeding && (!PhoneLoad.busy || speakingNow)) wakeEngine.feed(frame, rms, start)
         // A request can only be recorded while she is silent (enforced again in startCapture).
         if (!speakingNow) capture?.feed(frame, rms)
         if (liveSending && !speakingNow) liveSink?.invoke(frame)
@@ -492,12 +501,12 @@ class VoiceCommandService(
 
     /**
      * Her own microphone records the turn (no other app takes the mic): the cloud AI hears it, or
-     * in phone mode Gemma hears it. The phone's speech recogniser is only a fallback (quota out,
+     * in phone mode Whisper writes it down (or Gemma hears it). The phone's speech recogniser is only a fallback (quota out,
      * or no on-phone model that can hear).
      */
     private fun useAiListening(): Boolean {
         if (!aiListening || onAudioCallback == null) return false
-        return if (phoneOnlyNow()) com.example.ai.gemma.GemmaEngine.canHear(appContext)
+        return if (phoneOnlyNow()) com.example.ai.offline.PhoneListener.isAvailable(appContext) || com.example.ai.gemma.GemmaEngine.canHear(appContext)
         else System.currentTimeMillis() >= phoneRecognizerUntil
     }
 
@@ -840,6 +849,7 @@ class VoiceCommandService(
      * from (what the user said after her name while the connection opened). Main thread.
      */
     fun beginLive(seedFrom: Long, sink: (ShortArray) -> Unit) {
+        com.example.diag.AppTrail.add("LIVE", "started")
         restartListeningJob?.cancel()
         if (sessionKind == SessionKind.COMMAND) cancelSession(destroy = false)
         liveActive = true
@@ -859,6 +869,7 @@ class VoiceCommandService(
 
     /** Live session ended (goodbye, silence, error or fallback). Main thread. */
     fun endLive(reason: String) {
+        com.example.diag.AppTrail.add("LIVE", "ended")
         livePending = false
         if (!liveActive) return
         liveActive = false
@@ -1035,9 +1046,9 @@ class VoiceCommandService(
                 _livePartialTranscript.value = ""
                 deliverAudio(wav)
             },
-            onNoSpeech = { wav, loudest, needed ->
+            onNoSpeech = { wav, loudest, needed, framesAbove, longestRunMs ->
                 if (capture?.isFinished == true) capture = null
-                VoiceLog.add(VoiceLog.Kind.IGNORED, "No speech heard in %.0f s (loudest sound %.0f, speech needs %.0f). Play it back in Diagnostics.".format((wav.size - 44) / 32_000.0, loudest, needed))
+                VoiceLog.add(VoiceLog.Kind.IGNORED, "No speech heard in %.0f s (loudest sound %.0f, speech needs %.0f, above that for %d frames, longest run %d ms). Play it back in Diagnostics.".format((wav.size - 44) / 32_000.0, loudest, needed, framesAbove, longestRunMs))
                 scope.launch(Dispatchers.IO) { runCatching { lastHeardFile(appContext).writeBytes(wav) } }
                 onSessionEnded()
                 _livePartialTranscript.value = ""
@@ -1419,6 +1430,29 @@ class VoiceCommandService(
         preferredLanguage: String
     ): Pair<String, CompanionChatTurn?> {
         if (phoneOnlyNow()) {
+            if (com.example.ai.offline.PhoneListener.isAvailable(appContext)) {
+                when (val r = com.example.ai.offline.PhoneListener.transcribe(appContext, wav, recognitionLanguageTag)) {
+                    is com.example.ai.offline.PhoneListener.Result.Unavailable -> throw AiUnavailableException(r.reason)
+                    is com.example.ai.offline.PhoneListener.Result.Text -> {
+                        if (r.text.isEmpty()) {
+                            VoiceLog.add(VoiceLog.Kind.IGNORED, "Whisper found no words (%.1f s)".format(r.seconds))
+                            return "" to null
+                        }
+                        VoiceLog.add(VoiceLog.Kind.HEARD, "Whisper wrote \"${r.text.take(80)}\" in %.1f s (${r.pack.id})".format(r.seconds))
+                        LocalCommands.parse(r.text, recognitionLanguageTag)?.let { local ->
+                            VoiceLog.add(VoiceLog.Kind.AI, "Understood on the phone (no AI used): ${local.actionType.label}")
+                            lastEngine = "On phone"
+                            return r.text to local
+                        }
+                        lastEngine = "Gemma"
+                        return when (val a = com.example.ai.gemma.GemmaEngine.answer(appContext, r.text, companion.displayName, preferredLanguage, history)) {
+                            is com.example.ai.gemma.GemmaEngine.Result.Answer -> r.text to a.turn
+                            is com.example.ai.gemma.GemmaEngine.Result.Unavailable -> throw AiUnavailableException(a.reason)
+                        }
+                    }
+                }
+            }
+            // No Whisper downloaded: Gemma hears the recording itself (slower, less reliable).
             lastEngine = "Gemma"
             return when (val r = com.example.ai.gemma.GemmaEngine.hear(appContext, wav, companion.displayName, preferredLanguage, history)) {
                 is com.example.ai.gemma.GemmaEngine.Heard.Turn -> r.heard to r.turn

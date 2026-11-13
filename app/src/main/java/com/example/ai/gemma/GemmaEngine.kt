@@ -41,11 +41,14 @@ object GemmaEngine {
         "If the recording has no clear speech meant for you (silence, noise, a TV, music), reply with {\"heard\": \"\"} only."
 
     /** Reads what Gemma heard in a recording ("" when nothing was said). Pure, unit-tested. */
-    fun parseHeard(answer: String): String {
+    fun parseHeard(answer: String): String? {
         val start = answer.indexOf('{')
         val end = answer.lastIndexOf('}')
-        if (start < 0 || end <= start) return ""
-        return runCatching { JSONObject(answer.substring(start, end + 1)).optString("heard").trim() }.getOrDefault("")
+        if (start < 0 || end <= start) return null
+        return runCatching {
+            val o = JSONObject(answer.substring(start, end + 1))
+            if (o.has("heard")) o.optString("heard").trim() else null
+        }.getOrNull()
     }
 
     /** Reads Gemma's answer: (reply, action, target). Falls back to plain text as the reply. Pure, unit-tested. */
@@ -63,7 +66,7 @@ object GemmaEngine {
     }
 
     /** The model file to use: E2B if downloaded (faster), else E4B, else none. */
-    private fun downloadedModel(context: Context): GemmaModel? {
+    internal fun downloadedModel(context: Context): GemmaModel? {
         val d = GemmaLab.downloader(context)
         return GemmaCatalog.MODELS.firstOrNull { d.file(it).exists() }
     }
@@ -119,7 +122,16 @@ object GemmaEngine {
             return Heard.Unavailable("The on-phone AI could not listen (${e.javaClass.simpleName}).")
         }
         val seconds = (System.currentTimeMillis() - t0) / 1000.0
-        val heard = parseHeard(raw)
+        VoiceLog.add(VoiceLog.Kind.AI, "Gemma replied: ${raw.replace('\n', ' ').take(120)}")
+        val parsed = parseHeard(raw)
+        val heard = when {
+            parsed != null -> parsed
+            parse(raw).first.isNotBlank() -> {
+                VoiceLog.add(VoiceLog.Kind.AI, "Gemma answered without writing down the words")
+                "(voice)"
+            }
+            else -> ""
+        }
         if (heard.isEmpty()) {
             VoiceLog.add(VoiceLog.Kind.IGNORED, "Gemma heard nothing for her (%.1f s)".format(seconds))
             return Heard.Turn("", null, seconds)

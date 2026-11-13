@@ -72,6 +72,8 @@ class GemmaRunner(context: Context) {
         closeAll()
         _state.value = State.Loading(model, processor)
         val started = System.currentTimeMillis()
+        com.example.diag.AppTrail.add("GEMMA", "loading ${model.label} on ${processor.label}")
+        com.example.ai.PhoneLoad.enter()
         try {
             // Lets the library report its own speed figures (time to first word, words per second).
             runCatching { com.google.ai.edge.litertlm.ExperimentalFlags.enableBenchmark = true }
@@ -88,11 +90,13 @@ class GemmaRunner(context: Context) {
             engine = e
             chat = null
             _state.value = State.Loaded(model, processor, (System.currentTimeMillis() - started) / 1000.0)
+            com.example.diag.AppTrail.add("GEMMA", "loaded in %.1f s, hears audio: $hearsAudio".format((System.currentTimeMillis() - started) / 1000.0))
             _stats.value = Stats(memoryMb = memoryMb(), batteryTempC = batteryTemp())
         } catch (t: Throwable) {
             Log.w(TAG, "Load failed: ${t.javaClass.simpleName}: ${t.message}")
             closeAll()
             val why = t.message?.take(160) ?: t.javaClass.simpleName
+            com.example.diag.AppTrail.add("GEMMA", "load failed ${t.javaClass.simpleName}")
             _state.value = State.Failed(
                 when {
                     why.contains("OpenCL", true) -> "This phone's graphics chip can't run it (OpenCL missing). Use CPU."
@@ -100,6 +104,8 @@ class GemmaRunner(context: Context) {
                     else -> "Could not load ${model.label} on ${processor.label}: $why"
                 }
             )
+        } finally {
+            com.example.ai.PhoneLoad.exit()
         }
     }
 
@@ -141,7 +147,7 @@ class GemmaRunner(context: Context) {
         val e = engine ?: throw IllegalStateException("Load a model first.")
         closeChat()
         val conv = e.createConversation(config)
-        try { return block(conv) } finally { try { conv.close() } catch (_: Throwable) {} }
+        try { return com.example.ai.PhoneLoad.during { block(conv) } } finally { try { conv.close() } catch (_: Throwable) {} }
     }
 
     /** The reply as it is written, piece by piece. */
@@ -150,6 +156,7 @@ class GemmaRunner(context: Context) {
         val started = System.currentTimeMillis()
         var first = 0L
         var pieces = 0
+        com.example.ai.PhoneLoad.enter()
         try {
             emitAll(c.sendMessageAsync(text).map { m ->
                 if (first == 0L) first = System.currentTimeMillis()
@@ -157,6 +164,7 @@ class GemmaRunner(context: Context) {
                 m.toString()
             })
         } finally {
+            com.example.ai.PhoneLoad.exit()
             // Our own measurement (pieces are about one token each); the library's figures win when it has them.
             val writing = (System.currentTimeMillis() - first).coerceAtLeast(1L) / 1000.0
             measured = Stats(
@@ -175,9 +183,10 @@ class GemmaRunner(context: Context) {
         val e = engine ?: throw IllegalStateException("Load a model first.")
         closeChat()
         val conv = e.createConversation(answerConfig(systemPrompt))
+        com.example.ai.PhoneLoad.enter()
         try {
             emitAll(conv.sendMessageAsync(text).map { it.toString() })
-        } finally { try { conv.close() } catch (_: Throwable) {} }
+        } finally { com.example.ai.PhoneLoad.exit(); try { conv.close() } catch (_: Throwable) {} }
     }.flowOn(dispatcher)
 
     @Volatile private var measured = Stats()
@@ -236,6 +245,7 @@ class GemmaRunner(context: Context) {
     )
 
     suspend fun unload() = withContext(dispatcher) {
+        com.example.diag.AppTrail.add("GEMMA", "unloaded")
         closeAll()
         _state.value = State.Empty
         _stats.value = Stats()

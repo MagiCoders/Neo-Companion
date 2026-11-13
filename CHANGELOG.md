@@ -2,6 +2,16 @@
 
 Every update gets a new version. Check yours in **Settings** (bottom of the screen): `MochiLife <version> (build <code>)`.
 
+## 3.2 (build 23)
+Crash recorder, Whisper listens in phone mode, and less load while she thinks on the phone.
+- Diagnostics → "Last close": why Android last ended the app (app crash, engine crash, killed for memory, frozen), the last app error, and what the app was doing just before. "Copy last close" and "Copy app trail" copy it for you to send. Nothing leaves the phone and no speech is recorded in it.
+- A rolling app trail (screens, model loads, downloads, memory every 30 s, voice wake and error events) survives crashes and kills.
+- Phone mode now listens with Whisper (base for English, small for Arabic and Persian when downloaded), tries the on-phone commands first (about 1 s) and asks Gemma only when needed. If no Whisper is downloaded Gemma listens itself, and its reply is never dropped silently: the log shows what it said, and an answer without the written-down words is still used. Settings → AI engine shows which of Gemma and Whisper are downloaded.
+- Hold to talk in Gemma Lab: the press no longer leaves the microphone held open if the language or chip changes mid-press or the screen closes; clear messages when the microphone permission is off or no sound arrived; all speech-engine calls run on one thread; models are freed when you leave the Lab.
+- While Whisper or Gemma works, the 3D character draws at 10 fps and her name is not decoded (a tap still interrupts); the floating bubble shows "Thinking…" in phone mode.
+- "No speech heard" log lines now also say how many frames were above the speech level and the longest unbroken run.
+- Licence reminder: sherpa-onnx 1.13.8 bundles espeak-ng (GPL). Test builds only; it must not ship on Google Play (see docs/PROJECT_RECORD.md, Release blockers).
+
 ## 3.1 (build 22)
 "On this phone" really stays on the phone, Gemma hears you directly, the Gemma test works, and a timed offline-voice test.
 - "On this phone" never starts a Live (cloud) conversation any more. The mic button started Live whenever "Live conversation" was on, whatever the AI engine; it now checks the engine (and being offline) first.

@@ -122,7 +122,8 @@ class CharacterController(
                 val dtSec = ((nowMs - lastFrameMs).coerceIn(1L, 100L)) / 1000f
                 lastFrameMs = nowMs
                 stepFrame(nowMs, dtSec)
-                delay(frameDelayMs)
+                // Slower while a heavy on-phone model is working, so it gets the processor.
+                delay(if (com.example.ai.PhoneLoad.busy) maxOf(frameDelayMs, 100L) else frameDelayMs)
             }
         }
     }

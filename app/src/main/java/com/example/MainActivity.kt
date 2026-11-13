@@ -162,6 +162,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        com.example.diag.AppTrail.add("APP", "on screen")
         // Back in the app: the in-app companion takes over from the floating one. The listening
         // service keeps running (started now, while on screen, so Android lets it use the mic
         // in the background later); only its bubble is hidden.
@@ -193,6 +194,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
+        com.example.diag.AppTrail.add("APP", "left screen")
         voice.releaseHost("activity")
     }
 }

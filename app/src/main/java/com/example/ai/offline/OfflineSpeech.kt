@@ -129,6 +129,7 @@ class OfflineVoice private constructor(private val tts: OfflineTts) {
 
         fun load(context: Context, dir: File, pack: OfflinePack): OfflineVoice {
             val model = pack.files.first { it.first.endsWith(".onnx") }.first
+            com.example.diag.AppTrail.add("OFFLINE", "voice ${pack.id} loading")
             val config = OfflineTtsConfig(
                 model = OfflineTtsModelConfig(
                     vits = OfflineTtsVitsModelConfig(

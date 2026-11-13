@@ -1,6 +1,10 @@
 package com.example.ai.offline
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
+import com.example.diag.AppTrail
 import com.example.ai.SpeechCapture
 import com.example.ai.VoiceCommandService
 import com.example.ai.gemma.GemmaLab
@@ -41,13 +45,15 @@ class OfflineVoiceTest(context: Context) {
 
     private val pcm = ByteArrayOutputStream()
     private val probe: (ShortArray, Double) -> Unit = { frame, _ ->
-        val b = ByteBuffer.allocate(frame.size * 2).order(ByteOrder.LITTLE_ENDIAN)
-        b.asShortBuffer().put(frame)
-        synchronized(pcm) { if (pcm.size() < MAX_BYTES) pcm.write(b.array()) }
+        try {
+            val b = ByteBuffer.allocate(frame.size * 2).order(ByteOrder.LITTLE_ENDIAN)
+            b.asShortBuffer().put(frame)
+            synchronized(pcm) { if (pcm.size() < MAX_BYTES) pcm.write(b.array()) }
+        } catch (t: Throwable) {
+            AppTrail.add("LAB", "probe error ${t.javaClass.simpleName}")
+        }
     }
 
-    private var listener: OfflineListener? = null
-    private var listenerKey = ""
     private var voice: OfflineVoice? = null
     private var voiceKey = ""
 
@@ -59,10 +65,25 @@ class OfflineVoiceTest(context: Context) {
     /** Finger down: record from Mochi's microphone. */
     fun startRecording() {
         if (_busy.value || _recording.value) return
+        if (ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            _report.value = "Microphone permission is off. Allow it in the home screen first."
+            return
+        }
+        AppTrail.add("LAB", "hold to talk: recording")
         synchronized(pcm) { pcm.reset() }
         voiceService.holdMicForCheck = true
         voiceService.addProbe(probe)
         _recording.value = true
+    }
+
+    /** The press was cancelled (finger slid away, screen closed): drop the recording and let go of the mic. */
+    fun cancelRecording() {
+        if (!_recording.value) return
+        voiceService.removeProbe(probe)
+        voiceService.holdMicForCheck = false
+        _recording.value = false
+        synchronized(pcm) { pcm.reset() }
+        _report.value = "Cancelled."
     }
 
     /** Finger up: run the offline turn in [language] ("en", "ar", "fa") with the chosen listener. */
@@ -73,7 +94,13 @@ class OfflineVoiceTest(context: Context) {
         voiceService.holdMicForCheck = false
         _recording.value = false
         val audio = synchronized(pcm) { pcm.toByteArray() }
-        if (audio.size < 16_000) { _report.value = "Too short: hold the button while you talk."; return }
+        AppTrail.add("LAB", "released after %.1f s of sound".format(audio.size / 32_000.0))
+        if (audio.size < 16_000) {
+            _report.value = if (audio.size < 16_000 / 2) {
+                "No sound reached the test (%.1f s). Open the home screen once so her microphone is running, then try again.".format(audio.size / 32_000.0)
+            } else "Too short: hold the button while you talk."
+            return
+        }
         _busy.value = true
         scope.launch {
             try { _report.value = runTurn(SpeechCapture.wav(audio), audio.size / 32_000.0, stoppedAt, language, listenerPack) }
@@ -96,17 +123,12 @@ class OfflineVoiceTest(context: Context) {
         // ---- A) Whisper → Gemma (streamed) → Piper ----
         var firstSentence: String? = null
         if (listenerPack != null && packs.isReady(listenerPack)) {
-            val key = "${listenerPack.id}|$language"
-            if (listener == null || listenerKey != key) {
-                val t = System.currentTimeMillis()
-                listener?.release(); listener = null
-                listener = withContext(Dispatchers.IO) { OfflineListener.load(packs.dir(listenerPack), listenerPack, language) }
-                listenerKey = key
-                line("Listener loaded in %.1f s (once per language)".format((System.currentTimeMillis() - t) / 1000.0))
-            }
-            val t0 = System.currentTimeMillis()
-            val text = withContext(Dispatchers.Default) { listener!!.transcribe(wav) }
-            line("A · ${listenerPack.label} wrote \"$text\" in %.1f s".format((System.currentTimeMillis() - t0) / 1000.0))
+            val r = PhoneListener.transcribe(appContext, wav, language, forcePack = listenerPack)
+            if (r is PhoneListener.Result.Unavailable) { line("A · ${r.reason}"); return out.toString().trim() }
+            r as PhoneListener.Result.Text
+            if (r.loadSeconds > 0) line("Listener loaded in %.1f s (once per language)".format(r.loadSeconds))
+            val text = r.text
+            line("A · ${listenerPack.label} wrote \"$text\" in %.1f s".format(r.seconds))
             if (gemmaReady && text.isNotBlank()) {
                 val t1 = System.currentTimeMillis()
                 val sb = StringBuilder()
@@ -153,7 +175,7 @@ class OfflineVoiceTest(context: Context) {
     private suspend fun speakOffline(sentence: String, language: String, line: (String) -> Unit, since: () -> Double) {
         val pack = OfflineCatalog.voiceFor(language)
         if (!packs.isReady(pack)) { line("A · voice skipped: download ${pack.label} below."); return }
-        withContext(Dispatchers.IO) {
+        withContext(OfflineSpeechThread.dispatcher) {
             if (voice == null || voiceKey != pack.id) {
                 val t = System.currentTimeMillis()
                 voice?.release(); voice = null
@@ -171,10 +193,17 @@ class OfflineVoiceTest(context: Context) {
         }
     }
 
+    /** Frees the Piper voice only (the Lab screen was left). */
+    fun releaseVoice() {
+        val v = voice ?: return
+        voice = null; voiceKey = ""
+        v.stop()
+        scope.launch(OfflineSpeechThread.dispatcher) { runCatching { v.release() } }
+    }
+
     fun release() {
         voiceService.removeProbe(probe)
         if (_recording.value) voiceService.holdMicForCheck = false
-        listener?.release(); listener = null
         voice?.stop(); voice?.release(); voice = null
     }
 

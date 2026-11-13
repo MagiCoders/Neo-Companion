@@ -166,3 +166,7 @@ All paths are under `app/src/main/java/com/example/`. A new build session should
 To build: JDK 21, `./gradlew :app:assembleDebug --max-workers=1`. To test: run the Firebase emulators (Firestore and Auth) around `./gradlew :app:testDebugUnitTest`.
 
 The plan for what comes next is in [MochiLife: Launch Plan](https://claude.ai/artifact/LAfocss7wUB8EpdU9tReMB).
+
+## Release blockers
+
+Before any Play release: move sherpa-onnx to v2.0.x (no espeak-ng; the Whisper API used here is the same) and remove the Piper voice test, or replace its pronunciation step with a non-GPL one. Verify with `unzip -l` that no `espeak` file or symbol is in the APK. (sherpa-onnx v1.13.8's native library links espeak-ng, which is GPL-3.0.)

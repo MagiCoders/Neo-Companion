@@ -13,7 +13,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,6 +50,10 @@ internal fun OfflineVoiceCard(p: SuitePalette, accent: Color, allowMobile: Boole
     var language by remember { mutableStateOf("en") }
     var listenerId by remember { mutableStateOf(OfflineCatalog.LISTENER_BASE.id) }
     val listener = OfflineCatalog.LISTENERS.first { it.id == listenerId }
+    val currentLanguage by rememberUpdatedState(language)
+    val currentListener by rememberUpdatedState(listener)
+    val currentBusy by rememberUpdatedState(busy)
+    DisposableEffect(Unit) { onDispose { test.cancelRecording() } }
 
     LabCard(p) {
         Text("Offline voice (test)", style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold), color = p.textPrimary)
@@ -85,12 +91,12 @@ internal fun OfflineVoiceCard(p: SuitePalette, accent: Color, allowMobile: Boole
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(50))
                 .background(if (recording) Color(0xFFE57373) else accent.copy(alpha = if (busy) 0.4f else 1f))
-                .pointerInput(language, listenerId, busy) {
+                .pointerInput(Unit) {
                     detectTapGestures(onPress = {
-                        if (busy) return@detectTapGestures
+                        if (currentBusy) return@detectTapGestures
                         test.startRecording()
-                        tryAwaitRelease()
-                        test.stopAndRun(language, listener)
+                        val released = try { tryAwaitRelease() } catch (c: kotlinx.coroutines.CancellationException) { test.cancelRecording(); throw c }
+                        if (released) test.stopAndRun(currentLanguage, currentListener) else test.cancelRecording()
                     })
                 }
                 .padding(vertical = 14.dp)
