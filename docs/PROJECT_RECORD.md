@@ -169,4 +169,4 @@ The plan for what comes next is in [MochiLife: Launch Plan](https://claude.ai/ar
 
 ## Release blockers
 
-Before any Play release: move sherpa-onnx to v2.0.x (no espeak-ng; the Whisper API used here is the same) and remove the Piper voice test, or replace its pronunciation step with a non-GPL one. Verify with `unzip -l` that no `espeak` file or symbol is in the APK. (sherpa-onnx v1.13.8's native library links espeak-ng, which is GPL-3.0.)
+None known for the speech libraries. In 3.3 the Piper test voice and espeak-ng (GPL) were removed and sherpa-onnx moved to v2.0.1; the APK was checked for any espeak file or symbol (see CHANGELOG 3.3).

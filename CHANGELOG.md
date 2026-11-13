@@ -2,6 +2,18 @@
 
 Every update gets a new version. Check yours in **Settings** (bottom of the screen): `MochiLife <version> (build <code>)`.
 
+## 3.3 (build 24)
+Removes the crashing test voice, fixes a request said right after "Yes?", and gathers evidence for the background pause.
+- The Gemma Lab crash is gone: it was the Piper test voice (native crash in its speech engine). The test voice, its downloads and the GPL pronunciation data are removed, and sherpa-onnx is now version 2.0.1, which contains no espeak-ng. Whisper (the phone-mode listener) is unchanged. Voices left on the phone by 3.1 and 3.2 are deleted at start.
+- The voice detector no longer takes the first sound it hears as the room's noise. After "Yes?" that first sound was your own voice, so it demanded speech three times louder than you and logged "No speech heard" with a loud sound. It now starts from the room's real level (from the wake listener), capped, and keeps 0.75 s of lead-in so soft first sounds are not cut.
+- A microphone that delivers only silence (Android muted it) is noticed and restarted instead of waiting 7 s.
+- The echo check ("That was her own voice") now runs only when her voice was loud enough at the microphone to be an echo; otherwise your words are kept.
+- Phone mode: Whisper stays loaded when you leave the app (it was unloaded each time and took 3 s to reload); phone mode no longer calls the cloud voice or prepares cloud voice lines; Whisper gets a little silence around each clip. Settings now call "On this phone" basic and "Automatic" recommended.
+- The wake listener does not run while the Lab or Voice check is recording.
+- Tapping the floating bubble no longer stops the listening service. When you open the app, a service that Android no longer counts as a microphone service is re-registered.
+- More evidence: the "Mic details" line adds the service state, the microphone permission mode and how long ago the app left the screen; a CPU watch writes the busiest threads to the app trail when the app uses processor in the background; the 1-second voice tick idles when nothing needs the microphone.
+- Licence blocker resolved (see docs/PROJECT_RECORD.md). Checked on the built APK: no espeak file, no espeak-ng or espeak_ symbol in any sherpa-onnx library (the only mentions are v2 warning texts saying it is no longer used).
+
 ## 3.2 (build 23)
 Crash recorder, Whisper listens in phone mode, and less load while she thinks on the phone.
 - Diagnostics → "Last close": why Android last ended the app (app crash, engine crash, killed for memory, frozen), the last app error, and what the app was doing just before. "Copy last close" and "Copy app trail" copy it for you to send. Nothing leaves the phone and no speech is recorded in it.

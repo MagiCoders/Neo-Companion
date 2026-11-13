@@ -227,7 +227,7 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
     // Foreground service
     // ------------------------------------------------------------------------------------------
 
-    private fun startForegroundCompat() {
+    internal fun startForegroundCompat() {
         val channelId = "mochi_floating_companion"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(channelId, "Floating companion", NotificationManager.IMPORTANCE_LOW).apply {
@@ -285,6 +285,7 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
                 return
             }
         }
+        com.example.diag.AppTrail.add("SERVICE", "foreground started: microphone=$micHostAcquired, app priority ${com.example.diag.Importance.mine()}")
         if (micHostAcquired || Build.VERSION.SDK_INT < 30) {
             micHostAcquired = true
             voice.acquireHost(OWNER)
@@ -462,7 +463,8 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
             Intent(this, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         )
-        stopSelf()
+        // Keep running: the service holds the microphone right. The activity hides the bubble.
+        setWindowShown(false)
     }
 
     // ------------------------------------------------------------------------------------------
@@ -749,6 +751,33 @@ class FloatingCompanionService : Service(), LifecycleOwner, ViewModelStoreOwner,
             val running = instance
             if (running != null) { running.setWindowShown(true); return }
             startIfEnabled(context)
+        }
+
+        /** What the running service is, for the mic details: not running, not foreground, or its types. */
+        fun foregroundState(): String {
+            val s = instance ?: return "not running"
+            val types = if (Build.VERSION.SDK_INT >= 29) s.foregroundServiceType else -1
+            val name = when {
+                types < 0 -> "unknown"
+                Build.VERSION.SDK_INT >= 30 && types and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE != 0 &&
+                    Build.VERSION.SDK_INT >= 34 && types and ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE != 0 -> "microphone + special use"
+                Build.VERSION.SDK_INT >= 30 && types and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE != 0 -> "microphone"
+                Build.VERSION.SDK_INT >= 34 && types and ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE != 0 -> "special use"
+                else -> "not foreground ($types)"
+            }
+            return "$name, mic right: ${s.micHostAcquired}"
+        }
+
+        /** True when the service is running but Android does not have it as a microphone service. */
+        fun needsReassert(): Boolean {
+            val s = instance ?: return false
+            return !s.micHostAcquired || (Build.VERSION.SDK_INT >= 30 && s.foregroundServiceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE == 0)
+        }
+
+        /** Called while the app is on screen (Android then allows it): ask for the microphone type again. */
+        fun reassertForeground() {
+            com.example.diag.AppTrail.add("SERVICE", "reasserting foreground: ${foregroundState()}")
+            instance?.startForegroundCompat()
         }
 
         /** Back in the app: hide the bubble, keep listening. */

@@ -249,6 +249,9 @@ class OfflineWakeWord(context: Context) {
     }
 
     /** One frame from the microphone thread (ignored when not listening). */
+    /** The room's level as the wake listener's gate knows it (raw RMS), 0 when not known. */
+    val ambientFloor: Double get() = decoder?.gateFloor ?: 0.0
+
     fun feed(frame: ShortArray, rms: Double, startSample: Long) {
         decoder?.feed(frame, rms, startSample)
     }
@@ -297,6 +300,7 @@ class OfflineWakeWord(context: Context) {
             setEndpointerMode(ENDPOINTER_SHORT) // decide sooner after the phrase ends
         }
         private val gate = SoundGate()
+        val gateFloor: Double get() = gate.currentFloor
         private val leadIn = ArrayDeque<Pair<Long, ShortArray>>()
         private val pending = ArrayList<ShortArray>(BLOCK_FRAMES)
         private var pendingStart = 0L

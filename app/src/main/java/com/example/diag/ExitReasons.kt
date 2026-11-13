@@ -45,9 +45,7 @@ object ExitReasons {
         return out.take(max)
     }
 
-    private fun importanceName(i: Int) = when (i) {
-        100 -> "on screen"; 125 -> "listening service"; 200 -> "visible"; else -> i.toString()
-    }
+    private fun importanceName(i: Int) = Importance.name(i)
 
     fun report(context: Context, count: Int = 3): String {
         if (Build.VERSION.SDK_INT < 30) return "Exit reasons need Android 11 or newer."

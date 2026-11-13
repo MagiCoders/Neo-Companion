@@ -54,6 +54,9 @@ object NaturalVoice {
 
     @Volatile var enabled = true
 
+    /** "On this phone" engine: never call the cloud voice (lines already kept on the phone still play). */
+    @Volatile var phoneOnly = false
+
     /** Call once with the app context so short lines survive restarts. */
     fun init(context: Context) {
         if (cacheDir == null) cacheDir = File(context.filesDir, "voice_lines").apply { mkdirs() }
@@ -90,6 +93,7 @@ object NaturalVoice {
             emit(it)
             return@flow
         }
+        if (phoneOnly) return@flow
         if (System.currentTimeMillis() < restingUntil) return@flow
         // Offline: use the phone's own voice at once instead of waiting for a timeout.
         appContext?.let { if (!NetworkState.isOnline(it)) return@flow }
@@ -151,7 +155,7 @@ object NaturalVoice {
      */
     suspend fun prepare(lines: List<String>, languageTag: String, character: CharacterSpec) {
         for (line in lines) {
-            if (!enabled || isReady(line, languageTag, character)) continue
+            if (!enabled || phoneOnly || isReady(line, languageTag, character)) continue
             var got = false
             speak(line, languageTag, character).collect { got = true }
             if (!got) return

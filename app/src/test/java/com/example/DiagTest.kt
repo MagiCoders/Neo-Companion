@@ -1,7 +1,9 @@
 package com.example
 
 import com.example.ai.VoiceActivity
+import com.example.ai.offline.OfflineAudio
 import com.example.diag.AppTrail
+import com.example.diag.CpuWatch
 import com.example.diag.ExitReasons
 import com.example.diag.TrailBuffer
 import org.junit.Assert.assertEquals
@@ -51,5 +53,36 @@ class DiagTest {
         repeat(8) { vad.feed(4000.0) }
         assertTrue(vad.framesAbove >= 8)
         assertTrue(vad.longestRunMs >= 8 * 30)
+    }
+
+    @Test fun speechRightAfterHerNameIsDetected() {
+        // The first frames are the user's own voice: they must not become the "room noise".
+        val vad = VoiceActivity(endSilenceMs = 300, noSpeechTimeoutMs = 60_000)
+        val events = ArrayList<VoiceActivity.Event>()
+        repeat(40) { events += vad.feed(5000.0) }
+        repeat(50) { events += vad.feed(80.0) }
+        assertTrue(events.indexOf(VoiceActivity.Event.SPEECH_START) in 0..5)
+        assertTrue(events.contains(VoiceActivity.Event.SPEECH_END))
+    }
+
+    @Test fun speechThresholdIsCapped() {
+        val vad = VoiceActivity(endSilenceMs = 300, noSpeechTimeoutMs = 600_000, initialFloor = 5000.0)
+        repeat(300) { vad.feed(4000.0) }
+        assertTrue(vad.lastThreshold <= 1500.0)
+    }
+
+    @Test fun whisperClipIsPaddedWithSilence() {
+        val pcm = ByteArray(1600 * 2) { if (it % 2 == 1) 0x40 else 0 } // 1,600 samples of 0.5
+        val out = OfflineAudio.padded(pcm)
+        assertEquals(1600 + 4800 + 8000, out.size)
+        assertEquals(0f, out[100], 0f)
+        assertEquals(0.5f, out[4800 + 10], 1e-3f)
+        assertEquals(0f, out[out.size - 1], 0f)
+    }
+
+    @Test fun threadStatLineIsParsed() {
+        val r = CpuWatch.parseStat("123 (Default Dispatcher (1)) S 1 2 3 4 5 6 7 8 9 10 50 25 0 0")
+        assertEquals("Default Dispatcher (1)", r?.first)
+        assertEquals(75L, r?.second)
     }
 }

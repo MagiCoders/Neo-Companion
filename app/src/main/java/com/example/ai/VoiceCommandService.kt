@@ -67,6 +67,9 @@ class VoiceCommandService(
     companion object {
         /** MediaRecorder.AudioSource.HOTWORD (system wake-word helpers); not a public constant. */
         private const val HOTWORD_SOURCE = 1999
+        private const val ECHO_POSSIBLE_LEVEL = 250.0
+        /** When the app last left the screen (0 = on screen). Read by the mic details and the CPU watch. */
+        @Volatile var lastLeftScreenAt = 0L
 
         /** The last recording sent to the AI (overwritten each turn, never uploaded anywhere else). */
         fun lastHeardFile(context: Context): java.io.File = java.io.File(context.cacheDir, "last_heard.wav")
@@ -196,15 +199,18 @@ class VoiceCommandService(
             var ticks = 0
             while (true) {
                 delay(1_000L)
-                checkOtherRecorders()
-                syncHub()
-                tickPhase()
+                if (hosts.isNotEmpty() || hub.isRunning) {
+                    checkOtherRecorders()
+                    syncHub()
+                    tickPhase()
+                }
                 if (++ticks % 5 == 0) launch(Dispatchers.Default) {
                     PerfMeter.sample()
                     if (ticks % 30 == 0) {
                         val mi = android.app.ActivityManager.MemoryInfo()
                         appContext.getSystemService(android.app.ActivityManager::class.java).getMemoryInfo(mi)
-                        com.example.diag.AppTrail.add("MEMORY", "app ${PerfMeter.read().memoryMb} MB, free ${mi.availMem / 1_048_576} MB, low: ${mi.lowMemory}")
+                        val cpu = com.example.diag.CpuWatch.sample(lastLeftScreenAt == 0L)
+                        com.example.diag.AppTrail.add("MEMORY", "app ${PerfMeter.read().memoryMb} MB, free ${mi.availMem / 1_048_576} MB, low: ${mi.lowMemory}, cpu $cpu%")
                     }
                 }
             }
@@ -249,17 +255,19 @@ class VoiceCommandService(
                 "$who source ${sourceName(c.clientAudioSource)}" + if (c.isClientSilenced) " (silenced)" else ""
             }
         } catch (_: Throwable) { "unknown" } else "unknown"
-        val importance = try {
-            val info = android.app.ActivityManager.RunningAppProcessInfo()
-            android.app.ActivityManager.getMyMemoryState(info)
-            when (info.importance) {
-                android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND -> "on screen"
-                android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE -> "listening service"
-                android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE -> "visible"
-                else -> "background (${info.importance})"
+        val importance = com.example.diag.Importance.mine()
+        val micMode = if (Build.VERSION.SDK_INT >= 29) try {
+            when (appContext.getSystemService(android.app.AppOpsManager::class.java)
+                .unsafeCheckOpNoThrow(android.app.AppOpsManager.OPSTR_RECORD_AUDIO, android.os.Process.myUid(), appContext.packageName)) {
+                android.app.AppOpsManager.MODE_ALLOWED -> "allowed"
+                android.app.AppOpsManager.MODE_FOREGROUND -> "while in use only"
+                android.app.AppOpsManager.MODE_IGNORED -> "ignored"
+                else -> "denied"
             }
-        } catch (_: Throwable) { "unknown" }
-        return "recorders: ${recorders.ifBlank { "none" }} · app priority: $importance · audio mode ${audioManager.mode}"
+        } catch (_: Throwable) { "unknown" } else "n/a"
+        val left = if (lastLeftScreenAt == 0L) "on screen" else "left screen ${(System.currentTimeMillis() - lastLeftScreenAt) / 1000} s ago"
+        return "recorders: ${recorders.ifBlank { "none" }} · app priority: $importance · audio mode ${audioManager.mode}" +
+            " · service: ${com.example.ui.character.FloatingCompanionService.foregroundState()} · mic permission mode: $micMode · $left"
     }
 
     private fun sourceName(source: Int): String = when (source) {
@@ -467,8 +475,9 @@ class VoiceCommandService(
 
     private val frameSink = MicHub.FrameSink { frame, rms, start ->
         // While Whisper or Gemma is working her name is not decoded (it would starve them); a tap
-        // still interrupts, and while she is speaking her name still does.
-        if (wakeFeeding && (!PhoneLoad.busy || speakingNow)) wakeEngine.feed(frame, rms, start)
+        // still interrupts, and while she is speaking her name still does. Not decoded while the Lab or the
+        // Voice check is recording either.
+        if (wakeFeeding && !holdMicForCheck && (!PhoneLoad.busy || speakingNow)) wakeEngine.feed(frame, rms, start)
         // A request can only be recorded while she is silent (enforced again in startCapture).
         if (!speakingNow) capture?.feed(frame, rms)
         if (liveSending && !speakingNow) liveSink?.invoke(frame)
@@ -747,7 +756,10 @@ class VoiceCommandService(
                 reevaluate()
             } else {
                 lastSpeakEndSample = hub.samplesRecorded
-                if (herLevelFrames > 20) VoiceLog.add(VoiceLog.Kind.SPOKE, "Her voice reached the mic at level %.0f after echo cancelling".format(herLevelSum / herLevelFrames))
+                if (herLevelFrames > 20) {
+                    lastHerLevel = herLevelSum / herLevelFrames
+                    VoiceLog.add(VoiceLog.Kind.SPOKE, "Her voice reached the mic at level %.0f after echo cancelling".format(lastHerLevel))
+                } else lastHerLevel = 0.0
                 if (liveActive) {
                     // Live: resume sending the mic a moment after her voice has really stopped.
                     restartListeningJob?.cancel()
@@ -1046,8 +1058,16 @@ class VoiceCommandService(
                 _livePartialTranscript.value = ""
                 deliverAudio(wav)
             },
+            ambientFloor = wakeEngine.ambientFloor,
             onNoSpeech = { wav, loudest, needed, framesAbove, longestRunMs ->
                 if (capture?.isFinished == true) capture = null
+                if (loudest < 5.0) {
+                    VoiceLog.add(VoiceLog.Kind.ERROR, "The microphone gave only silence for %.0f s (Android muted it). Restarting it.".format((wav.size - 44) / 32_000.0))
+                    hub.stop()
+                    onSessionEnded()
+                    reevaluate()
+                    return@SpeechCapture
+                }
                 VoiceLog.add(VoiceLog.Kind.IGNORED, "No speech heard in %.0f s (loudest sound %.0f, speech needs %.0f, above that for %d frames, longest run %d ms). Play it back in Diagnostics.".format((wav.size - 44) / 32_000.0, loudest, needed, framesAbove, longestRunMs))
                 scope.launch(Dispatchers.IO) { runCatching { lastHeardFile(appContext).writeBytes(wav) } }
                 onSessionEnded()
@@ -1095,8 +1115,17 @@ class VoiceCommandService(
      * The AI heard the user say [transcript] (an audio turn). Returns false when it must be
      * ignored: her own words picked up by the microphone, or a self-talk loop. Main thread.
      */
+    /** How loud her last reply was at the microphone after echo cancelling (0 when too short to tell). */
+    @Volatile private var lastHerLevel = 0.0
+
     fun onUserSaid(transcript: String): Boolean {
-        if (echoGuard.isEcho(transcript)) {
+        // Nothing is recorded while she speaks, so her words can only come back as an echo tail, and only if
+        // her voice was loud at the microphone. Below the speech level it cannot be her.
+        val sounded = echoGuard.isEcho(transcript)
+        if (sounded && lastHerLevel < ECHO_POSSIBLE_LEVEL) {
+            VoiceLog.add(VoiceLog.Kind.HEARD, "Same words as hers, but her voice was too quiet at the mic to be an echo: kept")
+        }
+        if (sounded && lastHerLevel >= ECHO_POSSIBLE_LEVEL) {
             VoiceLog.add(VoiceLog.Kind.IGNORED, "That was her own voice, not you: \"$transcript\"")
             awaitingReply = false
             if (conversationActive) restartListeningAfterIgnored()

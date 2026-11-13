@@ -26,12 +26,18 @@ class SpeechCapture(
      * level in it and the level speech had to reach, so "she didn't hear me" can be checked.
      */
     private val onNoSpeech: (ByteArray, Double, Double, Int, Int) -> Unit,
+    /** The room's level from the wake listener's gate (raw RMS), 0 when unknown. */
+    ambientFloor: Double = 0.0,
     /** Quiet that ends a turn: shorter for a short request, longer once they talk at length. */
     shortEndSilenceMs: Int = 900,
     longEndSilenceMs: Int = 1_300
 ) {
     private val main = Handler(Looper.getMainLooper())
-    private val vad = VoiceActivity(endSilenceMs = longEndSilenceMs, shortEndSilenceMs = shortEndSilenceMs)
+    private val vad = VoiceActivity(
+        endSilenceMs = longEndSilenceMs,
+        shortEndSilenceMs = shortEndSilenceMs,
+        initialFloor = if (ambientFloor > 0) ambientFloor else 60.0
+    )
     private val preRoll = ArrayDeque<ShortArray>()
     private val speech = ByteArrayOutputStream()
     private val everything = ByteArrayOutputStream() // the whole wait, for the no-speech report
@@ -98,7 +104,7 @@ class SpeechCapture(
         const val RATE = 16_000
         /** 30 ms frames. */
         const val FRAME = RATE * 30 / 1000
-        private const val PRE_ROLL_FRAMES = 15 // 450 ms before speech is detected
+        private const val PRE_ROLL_FRAMES = 25 // 750 ms before speech is detected (soft first sounds start below the speech level)
 
         fun rms(samples: ShortArray): Double {
             if (samples.isEmpty()) return 0.0
@@ -137,13 +143,15 @@ class VoiceActivity(
     private val longAfterVoicedMs: Int = 2_500,
     private val noSpeechTimeoutMs: Int = 7_000,
     private val maxUtteranceMs: Int = 25_000,
-    private val frameMs: Int = 30
+    private val frameMs: Int = 30,
+    /** Where the room's noise level starts (never the first frame heard: that can be the user's own voice). */
+    initialFloor: Double = MIN_FLOOR
 ) {
     enum class Event { SILENCE, SPEECH_START, IN_SPEECH, SPEECH_END, FALSE_START, TIMEOUT }
 
     private val shortEndMs = minOf(shortEndSilenceMs, endSilenceMs)
     val isInSpeech: Boolean get() = inSpeech
-    private var noiseFloor = -1.0
+    private var noiseFloor = initialFloor.coerceIn(MIN_FLOOR, MAX_FLOOR)
     private var aboveRun = 0
     private var belowRun = 0
     private var inSpeech = false
@@ -165,7 +173,6 @@ class VoiceActivity(
 
     fun feed(rms: Double): Event {
         lastDb = (20 * log10(max(rms, 1.0))).toFloat()
-        if (noiseFloor < 0) noiseFloor = max(rms, MIN_FLOOR)
         val threshold = max(noiseFloor * START_RATIO, MIN_SPEECH_RMS)
         lastThreshold = threshold
         if (rms > peakRms) peakRms = rms
@@ -175,7 +182,7 @@ class VoiceActivity(
             waitedFrames++
             // The floor follows the room: quickly down, slowly up (so speech doesn't raise it).
             noiseFloor = if (rms < noiseFloor) noiseFloor * 0.8 + rms * 0.2 else noiseFloor * 0.995 + rms * 0.005
-            noiseFloor = max(noiseFloor, MIN_FLOOR)
+            noiseFloor = noiseFloor.coerceIn(MIN_FLOOR, MAX_FLOOR)
             aboveRun = if (loud) aboveRun + 1 else 0
             if (aboveRun >= START_FRAMES) {
                 inSpeech = true
@@ -206,6 +213,8 @@ class VoiceActivity(
         const val START_FRAMES = 5          // 150 ms
         const val MIN_UTTERANCE_MS = 350
         const val MIN_FLOOR = 60.0
+        /** The speech level (floor × 3) never passes 1,500: real voices at the mic are 3,000 and up. */
+        const val MAX_FLOOR = 500.0
         const val MIN_SPEECH_RMS = 250.0
     }
 }

@@ -40,6 +40,9 @@ class SoundGate(
 
     val isOpen: Boolean get() = open
 
+    /** The room's running level (raw RMS) while the gate is closed; 0 until known. */
+    val currentFloor: Double get() = if (floor > 0) floor else 0.0
+
     fun decide(rms: Double): Decision {
         blocksSeen++
         if (floor < 0) floor = maxOf(rms, MIN_FLOOR)

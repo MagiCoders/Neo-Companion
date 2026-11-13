@@ -58,8 +58,7 @@ internal fun OfflineVoiceCard(p: SuitePalette, accent: Color, allowMobile: Boole
     LabCard(p) {
         Text("Offline voice (test)", style = MochiType.Label.copy(fontWeight = FontWeight.SemiBold), color = p.textPrimary)
         Text(
-            "Times a full turn with no internet: listening, Gemma's answer, and her voice. Test only: the open voices use a GPL " +
-                "pronunciation library, so they are not part of the Play release.",
+            "Times an offline turn: Whisper writes down what you say, then Gemma answers.",
             style = MochiType.Label, color = p.textTertiary
         )
 
@@ -72,9 +71,6 @@ internal fun OfflineVoiceCard(p: SuitePalette, accent: Color, allowMobile: Boole
             OfflineCatalog.LISTENERS.forEach { pack -> Chip(pack.label.substringBefore(" ("), listenerId == pack.id, accent, p) { listenerId = pack.id } }
         }
         OfflineCatalog.LISTENERS.forEach { PackRow(it, test.packs, allowMobile, p, accent) }
-
-        Text("Voices (Piper)", style = MochiType.Body.copy(fontWeight = FontWeight.SemiBold), color = p.textPrimary)
-        OfflineCatalog.VOICES.forEach { PackRow(it, test.packs, allowMobile, p, accent) }
 
         Text("Try a turn", style = MochiType.Body.copy(fontWeight = FontWeight.SemiBold), color = p.textPrimary)
         Row(horizontalArrangement = Arrangement.spacedBy(MochiSpacing.xs)) {

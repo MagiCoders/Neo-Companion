@@ -830,8 +830,8 @@ fun ProfileAndSettingsScreen(
                 Text(
                     when (settings.aiEngine) {
                         "cloud" -> "Cloud: Gemini answers (Live when on). Needs internet."
-                        "phone" -> "On this phone: Gemma answers offline, turn by turn, with the phone's voice. Download it in Gemma Lab first."
-                        else -> "Automatic: cloud when online, Gemma on the phone when offline."
+                        "phone" -> "On this phone (basic): works with no internet, but slower and it mishears more, especially Arabic and Persian. Download Gemma and Whisper in Gemma Lab first."
+                        else -> "Automatic (recommended): cloud when online, on the phone when offline."
                     },
                     style = MochiType.Label, color = p.textTertiary
                 )

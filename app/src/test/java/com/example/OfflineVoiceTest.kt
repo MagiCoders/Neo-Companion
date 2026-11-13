@@ -44,9 +44,6 @@ class OfflineVoiceUnitTest {
     }
 
     @Test fun catalogPointsAtTheRightFiles() {
-        assertEquals(OfflineCatalog.VOICE_AR, OfflineCatalog.voiceFor("ar"))
-        assertEquals(OfflineCatalog.VOICE_FA, OfflineCatalog.voiceFor("fa"))
-        assertEquals(OfflineCatalog.VOICE_EN, OfflineCatalog.voiceFor("de"))
         OfflineCatalog.ALL.forEach { pack ->
             pack.files.forEach { (name, size) ->
                 assertTrue(pack.url(name).startsWith("https://huggingface.co/csukuangfj/"))

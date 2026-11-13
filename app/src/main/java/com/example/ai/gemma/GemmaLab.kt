@@ -22,7 +22,6 @@ object LabCleanup {
     private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
     fun run(context: android.content.Context) {
         val app = context.applicationContext
-        OfflineVoiceLab.get(app).releaseVoice()
         if (com.example.ai.VoiceCommandService.shared(app).phoneOnlyNow()) return
         com.example.ai.offline.PhoneListener.release()
         scope.launch { GemmaLab.runner(app).unload() }

@@ -54,8 +54,6 @@ class OfflineVoiceTest(context: Context) {
         }
     }
 
-    private var voice: OfflineVoice? = null
-    private var voiceKey = ""
 
     fun checkGoogle() {
         _googleStatus.value = "Checking…"
@@ -114,20 +112,22 @@ class OfflineVoiceTest(context: Context) {
     private suspend fun runTurn(wav: ByteArray, seconds: Double, stoppedAt: Long, language: String, listenerPack: OfflinePack?): String {
         val out = StringBuilder()
         fun line(s: String) { out.appendLine(s); _report.value = out.toString() }
-        fun since() = (System.currentTimeMillis() - stoppedAt) / 1000.0
         line("Offline turn · language $language · you spoke %.1f s".format(seconds))
         val runner = GemmaLab.runner(appContext)
         val gemmaReady = runner.state.value is GemmaRunner.State.Loaded
         if (!gemmaReady) line("Gemma is not loaded: tap Use on a model above to time the answer.")
 
-        // ---- A) Whisper → Gemma (streamed) → Piper ----
+        // ---- A) Whisper → Gemma (streamed) ----
         var firstSentence: String? = null
+        var listenSeconds = 0.0
+        var answerSeconds = 0.0
         if (listenerPack != null && packs.isReady(listenerPack)) {
             val r = PhoneListener.transcribe(appContext, wav, language, forcePack = listenerPack)
             if (r is PhoneListener.Result.Unavailable) { line("A · ${r.reason}"); return out.toString().trim() }
             r as PhoneListener.Result.Text
             if (r.loadSeconds > 0) line("Listener loaded in %.1f s (once per language)".format(r.loadSeconds))
             val text = r.text
+            listenSeconds = r.seconds
             line("A · ${listenerPack.label} wrote \"$text\" in %.1f s".format(r.seconds))
             if (gemmaReady && text.isNotBlank()) {
                 val t1 = System.currentTimeMillis()
@@ -137,7 +137,8 @@ class OfflineVoiceTest(context: Context) {
                         sb.append(piece)
                         if (firstSentence == null) OfflineAudio.firstSentence(sb.toString())?.let {
                             firstSentence = it
-                            line("A · Gemma's first sentence in %.1f s: \"$it\"".format((System.currentTimeMillis() - t1) / 1000.0))
+                            answerSeconds = (System.currentTimeMillis() - t1) / 1000.0
+                            line("A · Gemma's first sentence in %.1f s: \"$it\"".format(answerSeconds))
                         }
                     }
                 } catch (e: Exception) {
@@ -147,8 +148,7 @@ class OfflineVoiceTest(context: Context) {
                 if (firstSentence == null && sb.isNotBlank()) firstSentence = sb.toString().trim()
                 line("A · Gemma's whole answer in %.1f s".format((System.currentTimeMillis() - t1) / 1000.0))
             }
-            val sentence = firstSentence
-            if (sentence != null) speakOffline(sentence, language, ::line, ::since)
+            if (firstSentence != null) line("Phone mode total (listener + first sentence): %.1f s".format(listenSeconds + answerSeconds))
         } else {
             line("A · skipped: download a Whisper listener below.")
         }
@@ -172,39 +172,9 @@ class OfflineVoiceTest(context: Context) {
         return out.toString().trim()
     }
 
-    private suspend fun speakOffline(sentence: String, language: String, line: (String) -> Unit, since: () -> Double) {
-        val pack = OfflineCatalog.voiceFor(language)
-        if (!packs.isReady(pack)) { line("A · voice skipped: download ${pack.label} below."); return }
-        withContext(OfflineSpeechThread.dispatcher) {
-            if (voice == null || voiceKey != pack.id) {
-                val t = System.currentTimeMillis()
-                voice?.release(); voice = null
-                voice = OfflineVoice.load(appContext, packs.dir(pack), pack)
-                voiceKey = pack.id
-                line("Voice loaded in %.1f s (once per language)".format((System.currentTimeMillis() - t) / 1000.0))
-            }
-            val t3 = System.currentTimeMillis()
-            var first = 0.0
-            voice!!.speak(sentence) {
-                first = since()
-                line("A · ${pack.label} first sound %.1f s after making it · FIRST SOUND %.1f s AFTER YOU STOPPED".format((System.currentTimeMillis() - t3) / 1000.0, first))
-            }
-            if (first == 0.0) line("A · the voice made no sound.")
-        }
-    }
-
-    /** Frees the Piper voice only (the Lab screen was left). */
-    fun releaseVoice() {
-        val v = voice ?: return
-        voice = null; voiceKey = ""
-        v.stop()
-        scope.launch(OfflineSpeechThread.dispatcher) { runCatching { v.release() } }
-    }
-
     fun release() {
         voiceService.removeProbe(probe)
         if (_recording.value) voiceService.holdMicForCheck = false
-        voice?.stop(); voice?.release(); voice = null
     }
 
     private fun memoryMb(): Int = android.os.Debug.MemoryInfo().also { android.os.Debug.getMemoryInfo(it) }.totalPss / 1024

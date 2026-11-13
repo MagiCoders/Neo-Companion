@@ -34,10 +34,8 @@ data class OfflinePack(
     val label: String,
     val repo: String,
     /** File name → approximate size in bytes (shown before downloading). */
-    val files: List<Pair<String, Long>>,
-    val kind: Kind
+    val files: List<Pair<String, Long>>
 ) {
-    enum class Kind { LISTENER, VOICE }
     val approxBytes: Long get() = files.sumOf { it.second }
     fun url(file: String) = "https://huggingface.co/$repo/resolve/main/$file"
 }
@@ -45,35 +43,17 @@ data class OfflinePack(
 object OfflineCatalog {
     val LISTENER_BASE = OfflinePack(
         "whisper-base", "Whisper base (faster)", "csukuangfj/sherpa-onnx-whisper-base",
-        listOf("base-encoder.int8.onnx" to 29_120_534L, "base-decoder.int8.onnx" to 130_672_026L, "base-tokens.txt" to 816_730L),
-        OfflinePack.Kind.LISTENER
+        listOf("base-encoder.int8.onnx" to 29_120_534L, "base-decoder.int8.onnx" to 130_672_026L, "base-tokens.txt" to 816_730L)
     )
     val LISTENER_SMALL = OfflinePack(
         "whisper-small", "Whisper small (more accurate)", "csukuangfj/sherpa-onnx-whisper-small",
-        listOf("small-encoder.int8.onnx" to 112_442_483L, "small-decoder.int8.onnx" to 262_226_114L, "small-tokens.txt" to 816_730L),
-        OfflinePack.Kind.LISTENER
-    )
-    val VOICE_EN = OfflinePack(
-        "voice-en", "English voice (Amy)", "csukuangfj/vits-piper-en_US-amy-medium",
-        listOf("en_US-amy-medium.onnx" to 63_201_425L, "tokens.txt" to 921L), OfflinePack.Kind.VOICE
-    )
-    val VOICE_AR = OfflinePack(
-        "voice-ar", "Arabic voice (Kareem)", "csukuangfj/vits-piper-ar_JO-kareem-medium",
-        listOf("ar_JO-kareem-medium.onnx" to 63_201_421L, "tokens.txt" to 954L), OfflinePack.Kind.VOICE
-    )
-    val VOICE_FA = OfflinePack(
-        "voice-fa", "Persian voice (Gyro)", "csukuangfj/vits-piper-fa_IR-gyro-medium",
-        listOf("fa_IR-gyro-medium.onnx" to 63_122_437L, "tokens.txt" to 940L), OfflinePack.Kind.VOICE
+        listOf("small-encoder.int8.onnx" to 112_442_483L, "small-decoder.int8.onnx" to 262_226_114L, "small-tokens.txt" to 816_730L)
     )
     val LISTENERS = listOf(LISTENER_BASE, LISTENER_SMALL)
-    val VOICES = listOf(VOICE_EN, VOICE_AR, VOICE_FA)
-    val ALL = LISTENERS + VOICES
+    val ALL = LISTENERS
 
-    /** The voice pack for a language code ("en", "ar", "fa"). */
     fun packDir(filesDir: File, pack: OfflinePack) = File(File(filesDir, "offline-speech"), pack.id)
     fun packReady(filesDir: File, pack: OfflinePack) = pack.files.all { File(packDir(filesDir, pack), it.first).exists() }
-
-    fun voiceFor(language: String): OfflinePack = when (language) { "ar" -> VOICE_AR; "fa" -> VOICE_FA; else -> VOICE_EN }
 }
 
 /** Downloads packs into the app's private storage, with resume, a space check and hash checks. */

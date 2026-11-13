@@ -243,6 +243,7 @@ class CadenceViewModel(
         voiceCommandService.useLive = s.liveMode && s.aiEngine != "phone"
         voiceCommandService.engineMode = s.aiEngine
         com.example.ai.NaturalVoice.enabled = s.naturalVoice
+        com.example.ai.NaturalVoice.phoneOnly = s.aiEngine == "phone"
         characterController.defaultLanguageTag = tag
     }
 
@@ -613,7 +614,7 @@ class CadenceViewModel(
      */
     private var prepareJob: kotlinx.coroutines.Job? = null
     private fun prepareVoiceLines() {
-        if (!_settings.value.naturalVoice || prepareJob?.isActive == true) return
+        if (!_settings.value.naturalVoice || prepareJob?.isActive == true || voiceCommandService.phoneOnlyNow()) return
         val tag = java.util.Locale.forLanguageTag(com.example.ai.VoiceLanguages.tagFor(_settings.value.preferredLanguage)).toLanguageTag()
         val short = tag.substringBefore('-')
         val lines = listOfNotNull(WAKE_ANSWER[short]) + (IDLE_LINES[short] ?: IDLE_LINES.getValue("en")).values.flatten()
