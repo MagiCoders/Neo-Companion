@@ -94,6 +94,7 @@ About 110 unit tests (voice pipeline, command parsing, security rules, diagnosti
 ## More
 
 - [CHANGELOG.md](CHANGELOG.md): every version, in plain words
+- [docs/ROADMAP.md](docs/ROADMAP.md): what is next and where help is welcome
 - [SECURITY.md](SECURITY.md): protections, reporting, console steps
 - [CONTRIBUTING.md](CONTRIBUTING.md) · [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 - [docs/](docs): [product documentation](docs/product-documentation.md), [design](docs/design), [development briefs and launch plan](docs/development)
