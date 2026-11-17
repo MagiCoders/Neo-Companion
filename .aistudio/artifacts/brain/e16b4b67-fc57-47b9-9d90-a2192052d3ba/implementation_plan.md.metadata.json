@@ -1,6 +1,0 @@
-{
-  "summary":  "Comprehensive functional implementation plan to transform MochiLife from a visual template into a responsive, persistent, voice-driven companion application with HashRouter-style navigation state, continuous wake-word detection, human-like neural voice tuning, and instant omnichannel command execution (WhatsApp calls/chats/contacts/voice notes, YouTube, social media, browser search, and media playback).",
-  "updatedAt":  "2026-10-31T14:07:16.537232042Z",
-  "requestFeedback":  true,
-  "userFacing":  true
-}

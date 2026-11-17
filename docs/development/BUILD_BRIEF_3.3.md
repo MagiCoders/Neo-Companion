@@ -8,7 +8,7 @@ Written 2026-11-13 after the user's 3.2 test on a Samsung Galaxy S22+ (8 GB).
 
 ## 0. Ground rules
 
-Same as `docs/BUILD_BRIEF_3.2.md` section 0 (read that section only, lines 9 to 37): repo location, never-touch list, code rules, build commands, large-file editing rule, delivery steps. Differences for this build:
+Same as `docs/development/BUILD_BRIEF_3.2.md` section 0 (read that section only, lines 9 to 37): repo location, never-touch list, code rules, build commands, large-file editing rule, delivery steps. Differences for this build:
 
 - Version: `versionCode = 24`, `versionName = "3.3"`. APK name `/home/claude/MochiLife-v3.3-build24.apk`. Build log `/tmp/claude-0/build33.log`.
 - 3.2 had 105 tests, all passing.
@@ -54,7 +54,7 @@ A6. Delete the folder `app/src/main/assets/espeak-ng-data/` (`git rm -r`). Add a
 
 A7. Verify after the build: `unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -ci espeak` prints 0, and `strings` on `lib/arm64-v8a/libsherpa-onnx-jni.so` extracted from the APK has no `espeak` (only when on v2.0.1).
 
-A8. `docs/PROJECT_RECORD.md` "Release blockers": replace the text with the result (resolved in 3.3 with v2.0.1, or still open if the fallback was used).
+A8. `docs/development/project-record.md` "Release blockers": replace the text with the result (resolved in 3.3 with v2.0.1, or still open if the fallback was used).
 
 A9. Tests: in `app/src/test/java/com/example/OfflineVoiceTest.kt` remove the `voiceFor` assertions from `catalogPointsAtTheRightFiles`; keep the rest.
 
@@ -181,7 +181,7 @@ Before sending:
 - [ ] Compiles; all tests pass (105 old, minus removed voice assertions, plus: 2 detector tests, 1 padding test, 1 `parseStat` test).
 - [ ] No `OfflineVoice`, `OfflineTts`, `espeak` anywhere in `SRC/` or assets (Grep). APK check from A7 done; result stated.
 - [ ] `PhoneListener.release()` is not called for trim levels 20 and 40.
-- [ ] CHANGELOG 3.3 entry in plain words; `docs/PROJECT_RECORD.md` release blocker updated.
+- [ ] CHANGELOG 3.3 entry in plain words; `docs/development/project-record.md` release blocker updated.
 - [ ] Committed and pushed; APK sent.
 
 Tell the user, in plain words and short:

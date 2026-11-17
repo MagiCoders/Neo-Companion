@@ -12,7 +12,7 @@ Removes the crashing test voice, fixes a request said right after "Yes?", and ga
 - The wake listener does not run while the Lab or Voice check is recording.
 - Tapping the floating bubble no longer stops the listening service. When you open the app, a service that Android no longer counts as a microphone service is re-registered.
 - More evidence: the "Mic details" line adds the service state, the microphone permission mode and how long ago the app left the screen; a CPU watch writes the busiest threads to the app trail when the app uses processor in the background; the 1-second voice tick idles when nothing needs the microphone.
-- Licence blocker resolved (see docs/PROJECT_RECORD.md). Checked on the built APK: no espeak file, no espeak-ng or espeak_ symbol in any sherpa-onnx library (the only mentions are v2 warning texts saying it is no longer used).
+- Licence blocker resolved (see docs/development/project-record.md). Checked on the built APK: no espeak file, no espeak-ng or espeak_ symbol in any sherpa-onnx library (the only mentions are v2 warning texts saying it is no longer used).
 
 ## 3.2 (build 23)
 Crash recorder, Whisper listens in phone mode, and less load while she thinks on the phone.
@@ -22,7 +22,7 @@ Crash recorder, Whisper listens in phone mode, and less load while she thinks on
 - Hold to talk in Gemma Lab: the press no longer leaves the microphone held open if the language or chip changes mid-press or the screen closes; clear messages when the microphone permission is off or no sound arrived; all speech-engine calls run on one thread; models are freed when you leave the Lab.
 - While Whisper or Gemma works, the 3D character draws at 10 fps and her name is not decoded (a tap still interrupts); the floating bubble shows "Thinking…" in phone mode.
 - "No speech heard" log lines now also say how many frames were above the speech level and the longest unbroken run.
-- Licence reminder: sherpa-onnx 1.13.8 bundles espeak-ng (GPL). Test builds only; it must not ship on Google Play (see docs/PROJECT_RECORD.md, Release blockers).
+- Licence reminder: sherpa-onnx 1.13.8 bundles espeak-ng (GPL). Test builds only; it must not ship on Google Play (see docs/development/project-record.md, Release blockers).
 
 ## 3.1 (build 22)
 "On this phone" really stays on the phone, Gemma hears you directly, the Gemma test works, and a timed offline-voice test.

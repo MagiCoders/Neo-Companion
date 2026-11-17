@@ -1,0 +1,24 @@
+MochiLife
+Copyright 2026 MagiCoders
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+It includes or depends on third-party software and models that remain under
+their own licences. They are not relicensed by this project:
+
+  - Android Jetpack, Jetpack Compose, Kotlin           Apache-2.0
+  - Firebase SDKs (AI Logic, Firestore, Auth, App Check,
+    Crashlytics) and Google ML Kit                      Google APIs / Firebase terms
+  - Filament (3D rendering)                             Apache-2.0
+  - Vosk (wake-word recognition)                        Apache-2.0
+  - sherpa-onnx (on-phone Whisper decoding)             Apache-2.0
+  - LiteRT-LM (on-phone Gemma runtime)                  Apache-2.0
+
+Models are NOT distributed in this repository. Users download them inside the
+app from their original publishers and accept the publishers' terms:
+
+  - Whisper (OpenAI)                                    MIT
+  - Gemma (Google)                                      Gemma Terms of Use
+
+Gemini and Firebase are services provided by Google. Anyone building this
+project must use their own Firebase project and credentials.

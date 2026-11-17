@@ -2,7 +2,7 @@
 
 Nov 10, 2026 · MochiLife team
 
-Live version: https://claude.ai/artifact/LAfocss7wUB8EpdU9tReMB. Companion: [PROJECT_RECORD.md](PROJECT_RECORD.md).
+Live version: https://claude.ai/artifact/LAfocss7wUB8EpdU9tReMB. Companion: [project-record.md](project-record.md).
 
 ## Goal and principles
 

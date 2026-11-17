@@ -1,0 +1,17 @@
+name: Bug report
+description: Something does not work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes: { label: What happened, description: Steps to reproduce and what you expected }
+    validations: { required: true }
+  - type: input
+    id: version
+    attributes: { label: App version, placeholder: "3.3" }
+  - type: input
+    id: device
+    attributes: { label: Device and Android version }
+  - type: textarea
+    id: logs
+    attributes: { label: Diagnostics, description: "Paste 'Copy last close' or the voice log from the Diagnostics screen. It contains no recorded speech." }

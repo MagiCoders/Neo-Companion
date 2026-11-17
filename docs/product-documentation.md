@@ -4,7 +4,7 @@
 **Android Package (`applicationId`):** `com.aistudio.cadence.mxkprz`  
 **Android Namespace:** `com.example`  
 **Cloud Backend:** Firebase Authentication (Google Sign-In via Jetpack `CredentialManager`) + Named Cloud Firestore Database (`ai-studio-android-e16b4b67-fc57-47b9-9d90-a2192052d3ba`) + Firebase AI Logic (`gemini-3.5-flash-lite`)  
-**All-in-One Illustrated PDF:** [`MOCHILIFE_COMPLETE_DOCUMENTATION.pdf`](./MOCHILIFE_COMPLETE_DOCUMENTATION.pdf)
+**All-in-One Illustrated PDF:** [`product-documentation.pdf`](./product-documentation.pdf)
 
 ---
 
@@ -81,7 +81,7 @@ All core requirements requested across our sessions are **100% complete and acti
 
 ## 4. App Screenshots
 
-All high-resolution (`1080×1920`) PNG screenshots are saved in [`/docs/screenshots/`](./screenshots/) and embedded inside [`MOCHILIFE_COMPLETE_DOCUMENTATION.pdf`](./MOCHILIFE_COMPLETE_DOCUMENTATION.pdf).
+All high-resolution (`1080×1920`) PNG screenshots are saved in [`/docs/screenshots/`](./screenshots/) and embedded inside [`product-documentation.pdf`](./product-documentation.pdf).
 
 ### Screenshot 1: Spatial 3D Stage, Bio-Mood Waveform Analyzer & Edge-Sticky Magnetic Overlay
 - Shows **Nurse Elena** on the holographic 3D stage, the **7 Multi-Reaction Physics Pills**, the **Live 60-FPS Bio-Mood & Tone Waveform Analyzer**, the **Omnichannel Call/Media Dock**, and the **Edge-Sticky Magnetic Floating Overlay** docked on the right screen edge.

@@ -352,7 +352,7 @@ Use it in: `PhoneListener.transcribe` (around the engine call), `GemmaRunner.one
 
 ## 7. Step F: licence note that must stay visible
 
-`gradle/libs.versions.toml` uses `sherpaOnnx = "v1.13.8"`. That version's `libsherpa-onnx-jni.so` links espeak-ng (GPL-3.0). Whisper itself (MIT) and sherpa-onnx (Apache-2.0) are fine, but **this binary must not ship on Google Play.** Keep 3.2 on v1.13.8 (test builds only). Add to `CHANGELOG.md` under 3.2 and to `docs/PROJECT_RECORD.md` under a "Release blockers" heading (create it if missing):
+`gradle/libs.versions.toml` uses `sherpaOnnx = "v1.13.8"`. That version's `libsherpa-onnx-jni.so` links espeak-ng (GPL-3.0). Whisper itself (MIT) and sherpa-onnx (Apache-2.0) are fine, but **this binary must not ship on Google Play.** Keep 3.2 on v1.13.8 (test builds only). Add to `CHANGELOG.md` under 3.2 and to `docs/development/project-record.md` under a "Release blockers" heading (create it if missing):
 
 > Before any Play release: move sherpa-onnx to v2.0.x (no espeak-ng; the Whisper API used here is the same) and remove the Piper voice test, or replace its pronunciation step with a non-GPL one. Verify with `unzip -l` that no `espeak` file or symbol is in the APK.
 

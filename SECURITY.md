@@ -1,6 +1,23 @@
-# Security
+# Security Policy
 
-How MochiLife protects users, and what still has to be switched on in the Firebase / Google Cloud consoles before release.
+## Supported versions
+Only the latest release on `main` receives security fixes. MochiLife is pre-release.
+
+## Reporting a vulnerability
+Please **do not open a public issue**. Use GitHub's private vulnerability reporting:
+*Security → Report a vulnerability* on this repository. Include steps to reproduce,
+affected version and impact. We aim to acknowledge within 5 working days.
+
+## Secrets and credentials
+This repository contains **no credentials**. `app/google-services.json`, keystores, `.env`
+and `local.properties` are git-ignored. To build, bring your own:
+
+- **Firebase project** and its `google-services.json` (shape in `app/google-services.json.example`).
+- **Gemini** is used through Firebase AI Logic in your own Firebase project; there is no Gemini API key in the app.
+
+If you ever find a credential in this repository or its history, report it privately as above.
+A Firebase Android API key is a client identifier by design; it is protected by restricting it
+in Google Cloud (Android apps, package + SHA-1) and by enforcing App Check.
 
 ## Built into the app
 
@@ -36,4 +53,3 @@ How MochiLife protects users, and what still has to be switched on in the Fireba
 firebase emulators:exec --only firestore,auth --project demo-test "./gradlew :app:testDebugUnitTest"
 ```
 
-Report vulnerabilities privately to the repository owner, not in public issues.

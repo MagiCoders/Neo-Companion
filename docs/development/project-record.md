@@ -2,7 +2,7 @@
 
 Nov 10, 2026 · MochiLife team
 
-Live version: https://claude.ai/artifact/L8GGnnJFq2QWtBam3SCJTF. Plan: [LAUNCH_PLAN.md](LAUNCH_PLAN.md).
+Live version: https://claude.ai/artifact/L8GGnnJFq2QWtBam3SCJTF. Plan: [launch-plan.md](launch-plan.md).
 
 ## What MochiLife is
 
