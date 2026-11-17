@@ -31,3 +31,6 @@ public/assets/aistudio/*.html
 # Firebase emulator logs
 *-debug.log
 firebase-debug.log
+
+# Firebase client config: each developer downloads their own from the Firebase console (see README)
+app/google-services.json
