@@ -14,5 +14,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Use placeholder Firebase config (no real credentials in CI)
         run: cp app/google-services.json.example app/google-services.json
-      - name: Unit tests
-        run: ./gradlew :app:testDebugUnitTest --no-daemon
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - name: Unit tests (Firestore rules run against the local emulator)
+        run: npx --yes firebase-tools@13 emulators:exec --only firestore,auth --project demo-test "./gradlew :app:testDebugUnitTest --no-daemon"
